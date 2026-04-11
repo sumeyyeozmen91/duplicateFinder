@@ -1,81 +1,94 @@
 import streamlit as st
 import pandas as pd
 import re
+from rapidfuzz import fuzz # %90 benzerlik için
+from sentence_transformers import SentenceTransformer, util # Semantik analiz için
 
-# Sayfa yapılandırması
-st.set_page_config(page_title="Jira Bug Deduplicator", page_icon="🐞", layout="wide")
+# Sayfa Ayarları
+st.set_page_config(page_title="Advanced Bug Deduplicator", page_icon="🧠", layout="wide")
 
-def normalize_and_semantic(text):
+# Modeli Önbelleğe Al (Her seferinde tekrar yüklenmesin)
+@st.cache_resource
+def load_model():
+    # Çok dilli ve hafif bir model (Türkçe desteği için ideal)
+    return SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+
+model = load_model()
+
+def normalize_text(text):
     if not text or pd.isna(text): return ""
     text = str(text).lower()
-    # Temizlik: Alfanümerik karakterler dışındakileri at
     text = re.sub(r"[^a-z0-9çğıöşü ]", " ", text)
-    # Semantik Normalizasyon
-    text = re.sub(r"\btap\b|\bpress\b|\bselect\b|\btıkla\b|\bseç\b", "click", text)
-    text = re.sub(r"\bhata\b|\berror\b|\bfail\b|\bbug\b|\bkusur\b", "issue", text)
     return re.sub(r"\s+", " ", text).strip()
 
-st.title("🐞 Jira Bug Deduplicator")
-st.markdown("""
-Bu araç, yeni bir bulgu (bug) açmadan önce elinizdeki **Jira havuzunu (CSV)** tarar. 
-**Exact (Birebir)** ve **Semantic (Anlamsal)** benzerlikleri bularak mükerrer kayıt açmanızı engeller.
-""")
+st.title("🧠 Advanced Bug Deduplicator")
+st.markdown("### Exact (%90 Similarity) + AI Semantic Analysis")
 
-# Sidebar - Dosya Yükleme
-st.sidebar.header("📂 Veri Kaynağı")
-uploaded_file = st.sidebar.file_uploader("Jira Export CSV dosyasını yükleyin", type=["csv"])
+# Sidebar
+st.sidebar.header("📂 Data Source")
+uploaded_file = st.sidebar.file_uploader("Upload Jira CSV", type=["csv"])
+similarity_threshold = st.sidebar.slider("Exact Match Similarity Threshold (%)", 0, 100, 90)
 
-# Ana Panel - Giriş Alanları
-st.subheader("🔍 Yeni Bulgu Kontrolü")
-col1, col2 = st.columns(2)
-with col1:
-    user_summary = st.text_input("Bulgu Özeti (Summary)", placeholder="Örn: Uygulama ana ekranda donuyor")
-with col2:
-    user_desc = st.text_area("Bulgu Açıklaması (Description)", placeholder="Örn: Login olduktan sonra yükleme ikonu gitmiyor...")
+# Input
+st.subheader("🔍 New Bug Entry")
+u_sum = st.text_input("Summary")
+u_desc = st.text_area("Description")
 
-if uploaded_file:
-    # CSV'yi oku
+if uploaded_file and (u_sum or u_desc):
     try:
-        # Jira bazen farklı ayırıcılar kullanabilir, sep=None otomatik algılar
-        df_pool = pd.read_csv(uploaded_file, sep=None, engine="python")
-        df_pool.columns = [c.strip() for c in df_pool.columns] # Kolon boşluklarını temizle
+        df = pd.read_csv(uploaded_file, sep=None, engine="python").fillna("")
+        df.columns = [c.strip() for c in df.columns]
         
-        if st.button("Benzerlikleri Kontrol Et"):
-            if not user_summary:
-                st.warning("Lütfen kontrol için en azından bir özet (Summary) girin.")
-            else:
-                norm_user_sum = normalize_and_semantic(user_summary)
-                norm_user_desc = normalize_and_semantic(user_desc)
-                
-                matches = []
-                
-                with st.spinner('Havuz taranıyor...'):
-                    for _, row in df_pool.iterrows():
-                        p_sum_raw = str(row.get('Summary', ''))
-                        p_desc_raw = str(row.get('Description', ''))
-                        p_key = str(row.get('Issue key', row.get('Key', 'N/A')))
-                        
-                        p_sum_norm = normalize_and_semantic(p_sum_raw)
-                        p_desc_norm = normalize_and_semantic(p_desc_raw)
-                        
-                        # Benzerlik Mantığı
-                        is_exact = norm_user_sum == p_sum_norm
-                        is_semantic = (len(norm_user_sum) > 5 and norm_user_sum in p_sum_norm) or \
-                                      (len(norm_user_desc) > 10 and norm_user_desc in p_desc_norm)
-                        
-                        if is_exact:
-                            matches.append({"Key": p_key, "Tip": "EXACT ✅", "Özet": p_sum_raw})
-                        elif is_semantic:
-                            matches.append({"Key": p_key, "Tip": "SEMANTIC 🧠", "Özet": p_sum_raw})
+        if st.button("Deep Search"):
+            matches = []
+            new_text = f"{u_sum} {u_desc}"
+            norm_new = normalize_text(new_text)
 
-                # Sonuçları Göster
-                if matches:
-                    st.warning(f"Toplam {len(matches)} benzer kayıt bulundu!")
-                    st.dataframe(pd.DataFrame(matches), use_container_width=True)
-                else:
-                    st.success("Benzer bir bulgu bulunamadı. Yeni kayıt açmak için güvenli!")
+            with st.spinner('Analiz ediliyor...'):
+                # 1. HAVUZU HAZIRLA
+                # Tüm havuzun summary+desc birleşimini alıyoruz
+                pool_texts = (df['Summary'] + " " + df['Description']).tolist()
+                
+                # 2. SEMANTIC ANALİZ (AI Hikayeleştirme)
+                new_embedding = model.encode(new_text, convert_to_tensor=True)
+                pool_embeddings = model.encode(pool_texts, convert_to_tensor=True)
+                cosine_scores = util.cos_sim(new_embedding, pool_embeddings)[0]
+
+                # 3. DÖNGÜ VE KONTROL
+                for i, row in df.iterrows():
+                    p_key = str(row.get('Issue key', row.get('Key', 'N/A')))
+                    p_text_raw = pool_texts[i]
+                    p_text_norm = normalize_text(p_text_raw)
                     
+                    # Exact Match Check (%90 Benzerlik)
+                    ratio = fuzz.token_set_ratio(norm_new, p_text_norm)
+                    
+                    # Semantic Score
+                    sem_score = float(cosine_scores[i])
+
+                    if ratio >= similarity_threshold:
+                        matches.append({
+                            "Key": p_key,
+                            "Method": f"Exact (%{ratio:.0f})",
+                            "Match Score": ratio / 100,
+                            "Summary": row['Summary']
+                        })
+                    elif sem_score > 0.75: # Anlamsal eşik
+                        matches.append({
+                            "Key": p_key,
+                            "Method": "AI Semantic",
+                            "Match Score": sem_score,
+                            "Summary": row['Summary']
+                        })
+
+            # Sonuçları Göster
+            if matches:
+                # Skora göre sırala
+                match_df = pd.DataFrame(matches).sort_values(by="Match Score", ascending=False)
+                st.warning(f"Found {len(matches)} potential duplicates!")
+                st.dataframe(match_df[["Key", "Method", "Summary"]], use_container_width=True)
+            else:
+                st.success("No duplicates found. You're good to go!")
+                
     except Exception as e:
-        st.error(f"Dosya okunurken bir hata oluştu: {e}")
-else:
-    st.info("Devam etmek için lütfen sol menüden Jira havuzunuzu içeren CSV dosyasını yükleyin.")
+        st.error(f"Error: {e}")
