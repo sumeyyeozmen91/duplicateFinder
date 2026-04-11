@@ -4,12 +4,10 @@ import re
 from rapidfuzz import fuzz
 from sentence_transformers import SentenceTransformer, util
 
-# --- Sayfa Ayarları ---
-st.set_page_config(page_title="Jira Bug Hunter Pro", page_icon="🕵️", layout="wide")
+st.set_page_config(page_title="Jira Bug Hunter AI", page_icon="🕵️", layout="wide")
 
 @st.cache_resource
 def load_ai_model():
-    # Türkçe/İngilizce uyumlu akıllı model
     return SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
 model = load_ai_model()
@@ -17,65 +15,44 @@ model = load_ai_model()
 def clean_text(text):
     if not text or pd.isna(text): return ""
     text = str(text).lower()
-    # Sadece harf, rakam ve Türkçe karakterleri koru
     text = re.sub(r"[^a-z0-9çğıöşü ]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
-# --- Arayüz Başlangıcı ---
 st.title("🕵️ Jira Bug Deduplicator Pro")
-st.markdown("---")
 
-# --- Sidebar: Ayarlar ---
+# Sidebar
 st.sidebar.header("📂 1. Veri Kaynağı")
 uploaded_file = st.sidebar.file_uploader("Jira CSV Export Yükle", type=["csv"])
 
-st.sidebar.header("⚙️ 2. Filtre Ayarları")
-strict_mode = st.sidebar.toggle("Strict Mode (AND)", value=True, help="Açık olduğunda, girdiğiniz TÜM kelimelerin havuzda geçmesini zorunlu kılar.")
-exact_threshold = st.sidebar.slider("Exact Benzerlik Eşiği (%)", 30, 100, 80, help="Metinlerin karakter bazlı benzerliğini ölçer.")
-semantic_threshold = st.sidebar.slider("Semantic Benzerlik Eşiği (%)", 30, 100, 85, help="Yapay zeka ile anlam benzerliğini ölçer.")
+st.sidebar.header("⚙️ 2. Hassasiyet Ayarları")
+exact_threshold = st.sidebar.slider("Exact Eşiği (%90+ Önerilir)", 50, 100, 90)
+semantic_threshold = st.sidebar.slider("Semantic Eşiği (AI)", 50, 100, 75)
 
-# --- Ana Ekran: Girişler ---
+# Girişler
 st.subheader("🔍 3. Yeni Bulgu Kontrolü")
-col_in1, col_in2 = st.columns(2)
-with col_in1:
-    u_sum = st.text_input("Bulgu Özeti (Summary)", placeholder="Örn: voice")
-with col_in2:
-    u_desc = st.text_area("Bulgu Açıklaması (Description)", placeholder="Örn: emoji")
+u_sum = st.text_input("Bulgu Özeti (Summary)", placeholder="Örn: voice recording")
+u_desc = st.text_area("Bulgu Açıklaması (Description)")
 
-# --- İşlem Mantığı ---
 if uploaded_file and (u_sum or u_desc):
     try:
-        # CSV Oku (Boş değerleri 'N/A' ile doldur)
         df = pd.read_csv(uploaded_file, sep=None, engine="python").fillna("N/A")
         df.columns = [c.strip() for c in df.columns]
         
-        # Sütun İsimlerini Yakala
         c_map = {c.lower(): c for c in df.columns}
-        sum_col = c_map.get('summary', c_map.get('özet', None))
-        desc_col = c_map.get('description', c_map.get('açıklama', None))
-        key_col = c_map.get('issue key', c_map.get('key', c_map.get('anahtar', None)))
-        stat_col = c_map.get('status', c_map.get('durum', None))
-        plat_col = c_map.get('platform', c_map.get('işletim sistemi', None))
-
-        if not sum_col:
-            st.error("Hata: CSV içinde 'Summary' veya 'Özet' sütunu bulunamadı!")
-            st.stop()
+        sum_col, desc_col = c_map.get('summary', 'Summary'), c_map.get('description', 'Description')
+        key_col, stat_col, plat_col = c_map.get('issue key', 'Key'), c_map.get('status', 'Status'), c_map.get('platform', 'Platform')
 
         if st.button("Derin Analizi Başlat"):
-            # Arama sorgusunu hazırla
             full_query = f"{u_sum} {u_desc}".strip()
             norm_query = clean_text(full_query)
-            search_keywords = [clean_text(w) for w in full_query.split() if len(clean_text(w)) > 2]
             
-            results = []
+            exact_results = []
+            semantic_results = []
             
-            with st.spinner('AI motoru ve kelime filtreleri çalışıyor...'):
-                # Havuz metinlerini birleştir
-                pool_texts = []
-                for _, row in df.iterrows():
-                    pool_texts.append(str(row[sum_col]) + " " + (str(row[desc_col]) if desc_col else ""))
+            with st.spinner('Hibrit analiz yapılıyor...'):
+                pool_texts = [(str(row[sum_col]) + " " + (str(row[desc_col]) if desc_col else "")) for _, row in df.iterrows()]
                 
-                # Semantic (AI) Embedding Hesapla
+                # AI Semantic Hesaplama
                 query_emb = model.encode(full_query, convert_to_tensor=True)
                 pool_embs = model.encode(pool_texts, convert_to_tensor=True)
                 cosine_scores = util.cos_sim(query_emb, pool_embs)[0]
@@ -84,58 +61,48 @@ if uploaded_file and (u_sum or u_desc):
                     p_text_raw = pool_texts[i]
                     p_text_clean = clean_text(p_text_raw)
                     
-                    # 1. KELİME KONTROLÜ (AND Mantığı)
-                    matched_kws = [kw for kw in search_keywords if kw in p_text_clean]
-                    all_keywords_present = len(matched_kws) == len(search_keywords)
-                    
-                    # 2. SKOR HESAPLAMALARI
-                    # fuzzy.token_set_ratio kelime sırası karışık olsa da benzerliği bulur
-                    exact_score = fuzz.token_set_ratio(norm_query, p_text_clean)
-                    sem_score = float(cosine_scores[i]) * 100
+                    # 1. KADEME: EXACT KONTROLÜ (Sert Filtre)
+                    # ratio: Karakter karakter benzerlik (voice recording != voice message)
+                    e_score = fuzz.partial_ratio(norm_query, p_text_clean)
+                    # Öbek kontrolü (Zorunlu İçerme)
+                    phrase_match = norm_query in p_text_clean
 
-                    # --- FİLTRELEME KARAR MEKANİZMASI ---
-                    
-                    # Strict Mode aktifse ve tüm kelimeler yoksa bu kaydı atla
-                    if strict_mode and not all_keywords_present:
-                        continue
-                    
-                    match_type = None
-                    display_score = 0
-                    
-                    # Kriter 1: Exact Benzerlik (Slider'a bağlı)
-                    if exact_score >= exact_threshold:
-                        match_type = f"Exact Match (%{exact_score:.0f})"
-                        display_score = exact_score
-                    
-                    # Kriter 2: Semantic Benzerlik (Slider'a bağlı)
-                    elif sem_score >= semantic_threshold:
-                        match_type = f"Semantic AI (%{sem_score:.0f})"
-                        display_score = sem_score
-                    
-                    # Eğer slider eşiklerinden biri geçildiyse sonuçlara ekle
-                    if match_type:
-                        results.append({
-                            "ID": row[key_col] if key_col else f"S-{i}",
-                            "Yöntem": match_type,
-                            "Status": row[stat_col] if stat_col else "N/A",
-                            "Platform": row[plat_col] if plat_col else "N/A",
-                            "Özet": row[sum_col],
-                            "Skor": display_score
-                        })
+                    # 2. KADEME: SEMANTIC KONTROLÜ
+                    s_score = float(cosine_scores[i]) * 100
 
-            # --- Sonuç Gösterimi ---
-            if results:
-                st.warning(f"⚠️ {len(results)} potansiyel çakışma bulundu.")
-                res_df = pd.DataFrame(results).drop_duplicates(subset=['ID']).sort_values(by="Skor", ascending=False)
-                st.dataframe(
-                    res_df[["ID", "Yöntem", "Status", "Platform", "Özet"]], 
-                    use_container_width=True, 
-                    hide_index=True
-                )
-            else:
-                st.success("✅ Belirtilen eşik değerlerinde benzer bir bulgu bulunamadı.")
-                
+                    res_obj = {
+                        "ID": row[key_col], "Status": row[stat_col], 
+                        "Platform": row[plat_col], "Özet": row[sum_col]
+                    }
+
+                    # Karar: Önce Exact Match (Öbek geçiyorsa veya %90+ ise)
+                    if phrase_match or e_score >= exact_threshold:
+                        res_obj["Skor"] = f"%{max(e_score, 100 if phrase_match else 0):.0f}"
+                        exact_results.append(res_obj)
+                    
+                    # Eğer Exact değilse ama Semantic eşiği geçiyorsa
+                    elif s_score >= semantic_threshold:
+                        res_obj["Skor"] = f"%{s_score:.0f}"
+                        semantic_results.append(res_obj)
+
+            # SONUÇLARI AYRI LİSTELERDE GÖSTER
+            col_res1, col_res2 = st.columns(2)
+            
+            with col_res1:
+                st.subheader("🎯 Exact Matches")
+                st.caption(f"İçinde '{full_query}' geçen veya %{exact_threshold}+ benzer olanlar")
+                if exact_results:
+                    st.dataframe(pd.DataFrame(exact_results), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Birebir eşleşme bulunamadı.")
+
+            with col_res2:
+                st.subheader("🧠 Semantic Matches (AI)")
+                st.caption(f"Anlamsal olarak benzeyenler (Eşik: %{semantic_threshold})")
+                if semantic_results:
+                    st.dataframe(pd.DataFrame(semantic_results), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Anlamsal benzerlik bulunamadı.")
+                    
     except Exception as e:
-        st.error(f"Sistemsel Hata: {e}")
-else:
-    st.info("Devam etmek için lütfen sol menüden Jira CSV dosyasını yükleyin.")
+        st.error(f"Hata: {e}")
