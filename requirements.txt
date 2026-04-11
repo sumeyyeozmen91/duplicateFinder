@@ -3,3 +3,4 @@ pandas
 rapidfuzz
 sentence-transformers
 torch
+xlsxwriter
