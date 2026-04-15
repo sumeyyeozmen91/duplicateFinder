@@ -5,7 +5,6 @@ import unicodedata
 from difflib import SequenceMatcher
 from io import BytesIO
 import numpy as np
-
 from sentence_transformers import SentenceTransformer
 
 st.set_page_config(page_title="BSDV_DUP_CHECK_AI", layout="wide")
@@ -20,23 +19,18 @@ SEMANTIC → Yazım farklı olsa da anlam benzerse eşleşme verir
 """)
 
 # -------------------------------------------------
-# Helpers
+# Text helpers
 # -------------------------------------------------
 def normalize(text: str) -> str:
     if pd.isna(text):
         return ""
-
     text = str(text).strip().lower()
     text = unicodedata.normalize("NFKC", text)
-
     text = text.replace("/", " ")
     text = text.replace("-", " ")
-
-    # Türkçe karakterleri korur
     text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
     text = text.replace("_", " ")
     text = re.sub(r"\s+", " ", text).strip()
-
     return text
 
 
@@ -44,153 +38,471 @@ def fuzzy(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def score_label(match_type: str) -> int:
+def tokenize(text: str) -> set[str]:
+    return set(normalize(text).split())
+
+
+def contains_any(text: str, keywords: list[str]) -> bool:
+    return any(k in text for k in keywords)
+
+
+def count_matches(text: str, keywords: list[str]) -> int:
+    return sum(1 for k in keywords if k in text)
+
+
+def best_type_rank(match_type: str) -> int:
     order = {"EXACT": 3, "FUZZY": 2, "SEMANTIC": 1}
     return order.get(match_type, 0)
 
 
-def tokenize(text: str) -> set:
-    return set(normalize(text).split())
+# -------------------------------------------------
+# Domain dictionaries
+# Flow is used as a guide, not as an exact required text.
+# -------------------------------------------------
+MAIN_FEATURE_KEYWORDS = {
+    "Calls": [
+        "voice call", "video call", "incoming call", "outgoing call", "missed call",
+        "group call", "call history", "recent calls", "dial a number", "bip contacts",
+        "arama", "görüşme", "gorusme", "çağrı", "cagri", "voip", "ringing"
+    ],
+    "Chats": [
+        "chat", "chats", "message", "messages", "conversation", "sohbet", "mesaj",
+        "reply", "forward", "bubble", "sticker", "emoji", "dictation",
+        "starred messages", "my reminders", "secret message", "media links and docs",
+        "voice message", "voice note", "audio message", "ses kaydı", "ses kaydi",
+        "sesli mesaj", "text message", "one to one chat", "group chat"
+    ],
+    "Status": [
+        "status", "my status", "text story", "story", "stories", "durum", "hikaye"
+    ],
+    "Channels": [
+        "channel", "channels", "discover", "following", "service info", "channel info",
+        "kanal"
+    ],
+    "More": [
+        "profile", "bip web", "storage management", "blocked contacts",
+        "my account", "appearance", "apperance", "help", "emergency", "paycell",
+        "settings", "chat settings", "privacy", "notifications", "ayar", "bildirim",
+        "gizlilik", "profil"
+    ],
+    "Share Extension": [
+        "share extension"
+    ],
+    "Chat Import": [
+        "chat import"
+    ],
+}
+
+SUB_FEATURE_KEYWORDS = {
+    "Chats_List": [
+        "chat list", "filter", "unread", "pin", "archive", "archived chats",
+        "select chat", "select all", "read all", "scroll right", "scroll left",
+        "more", "delete chat", "clear chat", "export chat", "exit",
+        "sık konuşulanlar", "sik konusulanlar", "frequently contacted", "frequent"
+    ],
+    "Chats_OneToOne": [
+        "one to one chat", "contact header", "contact info", "profile photo",
+        "chat search", "media links and docs", "secret message", "translate settings",
+        "groups in common", "view in adress book", "view in address book",
+        "block contact", "report contact"
+    ],
+    "Chats_Group": [
+        "group chat", "group subject", "group scheduler", "group settings",
+        "add participants", "member", "make admin", "remove from group", "exit group",
+        "invite with link", "reply privately"
+    ],
+    "Chats_Attachments": [
+        "plus attach", "attach", "gallery", "document", "contact", "location",
+        "poll", "camera", "instant video", "send money"
+    ],
+    "Chats_Reminders": [
+        "my reminders", "set reminder", "reminder", "reminders", "hatırlatıcı", "hatirlatici"
+    ],
+    "Chats_Starred": [
+        "starred", "starred messages", "star"
+    ],
+    "Chats_Search": [
+        "chat search", "search", "arama"
+    ],
+    "Chats_VoiceMessage": [
+        "voice message", "voice note", "audio message", "ses kaydı", "ses kaydi",
+        "sesli mesaj", "playback", "play", "pause", "seek", "rewind", "ileri sar",
+        "duration", "süre", "sure", "waveform"
+    ],
+    "Calls_List": [
+        "recent calls", "call history", "missed", "all calls", "favorites",
+        "add favorites", "contact info"
+    ],
+    "Calls_NewGroup": [
+        "new group call", "group call"
+    ],
+    "Calls_Dialer": [
+        "dial a number", "new contact", "delete number", "invite to bip"
+    ],
+    "Calls_Search": [
+        "search"
+    ],
+    "Calls_Voice": [
+        "voice call", "incoming voice call", "outgoing voice call"
+    ],
+    "Calls_Video": [
+        "video call", "incoming video call", "outgoing video call"
+    ],
+    "Status_Status": [
+        "status", "my status"
+    ],
+    "Status_Camera": [
+        "camera"
+    ],
+    "Status_TextStory": [
+        "text story"
+    ],
+    "Channels_List": [
+        "following", "discover", "filter", "search", "archive", "delete"
+    ],
+    "Channels_Info": [
+        "service info", "channel info"
+    ],
+    "More_Profile": [
+        "profile", "photo", "name", "what s on your mind", "customize", "games",
+        "paycell", "emergency", "starred", "bip web", "invite"
+    ],
+    "More_Settings": [
+        "settings", "chat settings", "backup", "chat wallpaper", "automatic download",
+        "save to gallery", "read receipts", "default received translation",
+        "storage management", "notifications", "blocked contacts", "my account",
+        "privacy", "appearance", "apperance", "emergency settings", "help"
+    ],
+}
+
+COMPONENT_KEYWORDS = {
+    "Frequent_Contacts": [
+        "sık konuşulanlar", "sik konusulanlar", "frequently contacted", "frequent"
+    ],
+    "Reply": [
+        "reply", "reply edilen", "yanıt", "yanit", "reply privately"
+    ],
+    "Forward": [
+        "forward", "forwarded", "ilet", "share"
+    ],
+    "Voice_Message": [
+        "voice message", "voice note", "audio message", "ses kaydı", "ses kaydi",
+        "sesli mesaj"
+    ],
+    "Voice_Message_Playback": [
+        "playback", "play", "pause", "seek", "rewind", "ileri sar", "duration",
+        "süre", "sure", "waveform"
+    ],
+    "Bubble_UI": [
+        "bubble", "alignment", "position", "size", "height", "width", "dik", "yatay",
+        "büyüklük", "buyukluk"
+    ],
+    "Search": [
+        "search", "arama", "search icon"
+    ],
+    "Starred": [
+        "starred", "starred messages", "star"
+    ],
+    "Reminder": [
+        "my reminders", "set reminder", "reminder", "reminders", "hatırlatıcı", "hatirlatici"
+    ],
+    "Sticker": [
+        "sticker"
+    ],
+    "Emoji": [
+        "emoji"
+    ],
+    "Reaction": [
+        "reaction"
+    ],
+    "Dictation": [
+        "dictation"
+    ],
+    "Text_Message": [
+        "text message", "message"
+    ],
+    "Camera": [
+        "camera", "instant video"
+    ],
+    "Gallery": [
+        "gallery"
+    ],
+    "Document": [
+        "document", "docs"
+    ],
+    "Location": [
+        "location", "konum"
+    ],
+    "Poll": [
+        "poll"
+    ],
+    "Secret_Message": [
+        "secret message"
+    ],
+    "Media_Links_Docs": [
+        "media links and docs", "media, links and docs", "media links"
+    ],
+    "Notifications": [
+        "notification", "notifications", "bildirim"
+    ],
+    "Contact_Info": [
+        "contact info", "contact header", "phone number", "contact name"
+    ],
+    "Profile_Photo": [
+        "profile photo", "photo"
+    ],
+    "Call_Voice": [
+        "voice call", "incoming voice call", "outgoing voice call"
+    ],
+    "Call_Video": [
+        "video call", "incoming video call", "outgoing video call"
+    ],
+    "Call_History": [
+        "recent calls", "call history", "missed call", "favorites", "add favorites"
+    ],
+    "Dialer": [
+        "dial a number", "new contact", "delete number"
+    ],
+}
+
+ACTION_KEYWORDS = {
+    "Crash": [
+        "crash", "crashes", "crashed", "çök", "cok", "dondu", "freeze", "freezes"
+    ],
+    "Open_Load_Display": [
+        "open", "opening", "display", "show", "appear", "load", "gelmiyor", "görünm",
+        "acıl", "açıl", "yüklen", "listelen"
+    ],
+    "Send": [
+        "send", "sending", "gönder", "gonder"
+    ],
+    "Receive": [
+        "receive", "received", "al", "gel"
+    ],
+    "Reply": [
+        "reply", "reply edilen", "yanıt", "yanit"
+    ],
+    "Forward": [
+        "forward", "forwarded", "ilet", "share"
+    ],
+    "Playback": [
+        "play", "pause", "rewind", "seek", "ileri sar", "duration", "süre", "sure"
+    ],
+    "Search": [
+        "search", "arama"
+    ],
+    "Delete": [
+        "delete", "deleted", "sil"
+    ],
+    "Edit": [
+        "edit", "edited", "düzenle", "duzenle"
+    ],
+    "Layout_UI": [
+        "alignment", "position", "size", "height", "width", "dik", "yatay",
+        "büyüklük", "buyukluk", "yakın", "spacing", "fade", "faded", "görsel", "ui"
+    ],
+    "Call": [
+        "voice call", "video call", "call", "arama", "görüşme", "gorusme"
+    ],
+    "Mute": [
+        "mute"
+    ],
+    "Archive": [
+        "archive", "archived"
+    ],
+    "Export": [
+        "export"
+    ],
+}
 
 
-def extract_feature(text: str) -> str:
+# -------------------------------------------------
+# Soft domain parsing
+# -------------------------------------------------
+def extract_main_feature(text: str) -> str:
     t = normalize(text)
+    best_name = "Other"
+    best_score = 0
 
-    feature_map = {
-        "Chats": [
-            "chat", "message", "messages", "starred messages", "reply",
-            "forward", "media", "link", "conversation", "mesaj", "sohbet",
-            "bubble"
-        ],
-        "Calls": [
-            "call", "voice call", "video call", "voip", "ringing",
-            "audio", "microphone", "speaker", "arama", "sesli", "görüşme"
-        ],
-        "Status": [
-            "status", "story", "stories", "durum", "hikaye"
-        ],
-        "Channels": [
-            "channel", "channels", "discover", "discovery", "kanal"
-        ],
-        "Settings": [
-            "settings", "privacy", "notification", "notifications",
-            "ayar", "bildirim", "gizlilik"
-        ],
-        "Search": [
-            "search", "arama", "search icon"
-        ],
-        "Reminders": [
-            "reminder", "reminders", "hatırlatıcı", "hatirlatici"
-        ],
-        "Authentication": [
-            "login", "sign in", "signin", "otp", "verification",
-            "giriş", "giris", "oturum"
-        ]
+    for name, keywords in MAIN_FEATURE_KEYWORDS.items():
+        score = count_matches(t, keywords)
+        if score > best_score:
+            best_score = score
+            best_name = name
+
+    # Hard safety: voice/video call is always Calls
+    if contains_any(t, ["voice call", "video call", "incoming call", "outgoing call", "group call", "call history"]):
+        return "Calls"
+
+    # Hard safety: voice message / audio message belongs to Chats, not Calls
+    if contains_any(t, ["voice message", "voice note", "audio message", "ses kaydı", "ses kaydi", "sesli mesaj"]):
+        return "Chats"
+
+    return best_name
+
+
+def extract_sub_feature(text: str, main_feature: str | None = None) -> str:
+    t = normalize(text)
+    mf = main_feature or extract_main_feature(text)
+
+    candidates = {
+        name: kws for name, kws in SUB_FEATURE_KEYWORDS.items()
+        if name.startswith(mf)
     }
 
-    for feature, keywords in feature_map.items():
-        for kw in keywords:
-            if kw in t:
-                return feature
+    best_name = f"{mf}_General" if mf != "Other" else "Other"
+    best_score = 0
 
-    return "Other"
+    for name, keywords in candidates.items():
+        score = count_matches(t, keywords)
+        if score > best_score:
+            best_score = score
+            best_name = name
+
+    # Safety rules
+    if mf == "Chats":
+        if contains_any(t, ["voice message", "voice note", "audio message", "ses kaydı", "ses kaydi", "sesli mesaj"]):
+            return "Chats_VoiceMessage"
+        if contains_any(t, ["my reminders", "set reminder", "reminder", "reminders", "hatırlatıcı", "hatirlatici"]):
+            return "Chats_Reminders"
+        if contains_any(t, ["starred", "starred messages", "star"]):
+            return "Chats_Starred"
+        if contains_any(t, ["one to one chat"]):
+            return "Chats_OneToOne"
+        if contains_any(t, ["group chat"]):
+            return "Chats_Group"
+        if contains_any(t, ["gallery", "document", "location", "poll", "camera", "instant video", "send money", "attach"]):
+            return "Chats_Attachments"
+        if contains_any(t, ["sık konuşulanlar", "sik konusulanlar", "frequently contacted", "frequent", "chat list", "archive"]):
+            return "Chats_List"
+
+    if mf == "Calls":
+        if contains_any(t, ["voice call", "incoming voice call", "outgoing voice call"]):
+            return "Calls_Voice"
+        if contains_any(t, ["video call", "incoming video call", "outgoing video call"]):
+            return "Calls_Video"
+        if contains_any(t, ["dial a number", "new contact", "delete number"]):
+            return "Calls_Dialer"
+        if contains_any(t, ["new group call", "group call"]):
+            return "Calls_NewGroup"
+
+    return best_name
 
 
-def extract_intent(text: str) -> str:
+def extract_component(text: str, main_feature: str | None = None, sub_feature: str | None = None) -> str:
     t = normalize(text)
 
-    intent_map = {
-        "Reply": ["reply", "replied", "reply edilen", "yanit", "yanıt"],
-        "Forward": ["forward", "forwarded", "ilet"],
-        "Delete": ["delete", "deleted", "sil"],
-        "Edit": ["edit", "edited", "duzenle", "düzenle"],
-        "Search": ["search", "arama"],
-        "Send": ["send", "sending", "gonder", "gönder"],
-        "Receive": ["receive", "received", "al"],
-        "Open": ["open", "opening", "acil", "açıl", "show", "display"],
-        "Crash": ["crash", "crashes", "crashed", "cokme", "çökme"],
-        "Layout": [
-            "alignment", "aligned", "position", "size", "height", "width",
-            "dik", "yatay", "buyukluk", "büyüklük", "gosterilmesi", "gösterilmesi",
-            "bubble"
-        ]
-    }
+    best_name = "General"
+    best_score = 0
+    for name, keywords in COMPONENT_KEYWORDS.items():
+        score = count_matches(t, keywords)
+        if score > best_score:
+            best_score = score
+            best_name = name
 
-    for intent, keywords in intent_map.items():
-        for kw in keywords:
-            if kw in t:
-                return intent
+    # Strong distinction: call vs voice message
+    if contains_any(t, ["voice message", "voice note", "audio message", "ses kaydı", "ses kaydi", "sesli mesaj"]):
+        if contains_any(t, ["playback", "play", "pause", "seek", "rewind", "ileri sar", "duration", "süre", "sure", "waveform"]):
+            return "Voice_Message_Playback"
+        return "Voice_Message"
 
-    return "General"
+    if contains_any(t, ["voice call", "incoming voice call", "outgoing voice call"]):
+        return "Call_Voice"
+
+    if contains_any(t, ["video call", "incoming video call", "outgoing video call"]):
+        return "Call_Video"
+
+    return best_name
 
 
-def extract_screen_tokens(text: str) -> set:
+def extract_action(text: str) -> str:
     t = normalize(text)
 
-    known_phrases = [
-        "my reminders",
-        "starred messages",
-        "chat screen",
-        "search screen",
-        "settings screen",
-        "notification screen",
-        "channel details",
-        "profile screen",
-        "call screen",
-        "message info",
-        "archived chats",
-        "chat ekranında",
-        "reply edilen mesaj"
-    ]
+    best_name = "General"
+    best_score = 0
+    for name, keywords in ACTION_KEYWORDS.items():
+        score = count_matches(t, keywords)
+        if score > best_score:
+            best_score = score
+            best_name = name
 
-    found = set()
-    for phrase in known_phrases:
-        if phrase in t:
-            found.add(phrase)
-
-    important_tokens = {
-        "reminder", "reminders",
-        "starred", "messages", "message",
-        "chat", "call", "status", "channel",
-        "settings", "notification", "notifications",
-        "profile", "search", "archive", "archived",
-        "reply", "bubble", "ekran", "screen"
-    }
-
-    tokens = set(t.split())
-    found.update(tokens & important_tokens)
-    return found
+    return best_name
 
 
-def semantic_context_ok(target_summary: str, pool_summary: str) -> bool:
-    target_feature = extract_feature(target_summary)
-    pool_feature = extract_feature(pool_summary)
+def domain_distance(row_a: dict, row_b: dict) -> int:
+    penalty = 0
+    if row_a["Main Feature"] != row_b["Main Feature"]:
+        penalty += 4
+    if row_a["Sub Feature"] != row_b["Sub Feature"]:
+        penalty += 3
+    if row_a["Component"] != row_b["Component"]:
+        penalty += 2
+    if row_a["Action"] != row_b["Action"]:
+        penalty += 1
+    return penalty
 
-    target_screen = extract_screen_tokens(target_summary)
-    pool_screen = extract_screen_tokens(pool_summary)
 
-    if target_screen and pool_screen and target_screen.isdisjoint(pool_screen):
+def semantic_guardrail_ok(row_a: dict, row_b: dict) -> bool:
+    # Different main feature -> reject
+    if row_a["Main Feature"] != row_b["Main Feature"]:
         return False
 
-    if target_feature != pool_feature:
-        if target_feature == "Other" and pool_feature == "Other":
-            t_tokens = tokenize(target_summary)
-            p_tokens = tokenize(pool_summary)
-            common = t_tokens & p_tokens
-            return len(common) >= 2
+    # Calls vs chat voice message must never mix
+    voice_message_components = {"Voice_Message", "Voice_Message_Playback"}
+    call_components = {"Call_Voice", "Call_Video"}
+
+    if (
+        row_a["Component"] in voice_message_components and row_b["Component"] in call_components
+    ) or (
+        row_b["Component"] in voice_message_components and row_a["Component"] in call_components
+    ):
         return False
+
+    # Strong component mismatch inside same main feature -> reject
+    strong_components = {
+        "Frequent_Contacts",
+        "Voice_Message",
+        "Voice_Message_Playback",
+        "Reply",
+        "Forward",
+        "Reminder",
+        "Starred",
+        "Search",
+        "Call_Voice",
+        "Call_Video",
+    }
+
+    if row_a["Component"] in strong_components and row_b["Component"] in strong_components:
+        if row_a["Component"] != row_b["Component"]:
+            return False
+
+    # If both sub-features are specific and different -> reject
+    if (
+        row_a["Sub Feature"] not in {"Other", f'{row_a["Main Feature"]}_General'} and
+        row_b["Sub Feature"] not in {"Other", f'{row_b["Main Feature"]}_General'} and
+        row_a["Sub Feature"] != row_b["Sub Feature"]
+    ):
+        return False
+
+    # If action is very specific and differs badly, reject
+    strong_actions = {"Reply", "Forward", "Playback", "Call", "Search"}
+    if row_a["Action"] in strong_actions and row_b["Action"] in strong_actions:
+        if row_a["Action"] != row_b["Action"]:
+            return False
 
     return True
 
 
-def semantic_intent_ok(target_summary: str, pool_summary: str) -> bool:
-    t_intent = extract_intent(target_summary)
-    p_intent = extract_intent(pool_summary)
-
-    if t_intent != p_intent:
-        return False
-
-    return True
+def build_match_reason(match_type: str, row_a: dict, row_b: dict) -> str:
+    if match_type == "EXACT":
+        return "EXACT_TEXT"
+    if match_type == "FUZZY":
+        return "FUZZY_SIMILAR_TEXT"
+    if row_a["Component"] == row_b["Component"] and row_a["Component"] != "General":
+        return f'SEMANTIC_SAME_COMPONENT:{row_a["Component"]}'
+    if row_a["Sub Feature"] == row_b["Sub Feature"]:
+        return f'SEMANTIC_SAME_SUB_FEATURE:{row_a["Sub Feature"]}'
+    return "SEMANTIC_GENERAL"
 
 
 # -------------------------------------------------
@@ -199,16 +511,14 @@ def semantic_intent_ok(target_summary: str, pool_summary: str) -> bool:
 with st.sidebar:
     delimiter = st.selectbox("CSV delimiter", [";", ","], index=0)
     fuzzy_threshold = st.slider("Fuzzy threshold", 0.70, 1.00, 0.90, 0.01)
-    semantic_threshold = st.slider("Semantic threshold", 0.70, 1.00, 0.82, 0.01)
+    semantic_threshold = st.slider("Semantic threshold", 0.70, 1.00, 0.84, 0.01)
     use_ai = st.toggle("Enable Semantic AI", value=True)
     best_match_only = st.toggle("Best match only", value=True)
-    strict_semantic_context = st.toggle("Strict semantic context check", value=True)
-    strict_semantic_intent = st.toggle("Strict semantic intent check", value=True)
+    use_semantic_guardrail = st.toggle("Use domain guardrail", value=True)
     show_debug = st.toggle("Show debug info", value=False)
 
 pool_file = st.file_uploader("POOL CSV", type=["csv"])
 target_file = st.file_uploader("TARGET CSV", type=["csv"])
-
 run = st.button("🔍 Find Duplicates")
 
 if not pool_file or not target_file:
@@ -218,7 +528,7 @@ if not run:
     st.stop()
 
 # -------------------------------------------------
-# Load Data
+# Load
 # -------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_csv(file_bytes: bytes, delimiter: str) -> pd.DataFrame:
@@ -237,8 +547,11 @@ def load_csv(file_bytes: bytes, delimiter: str) -> pd.DataFrame:
     df["Issue key"] = df["Issue key"].fillna("").astype(str).str.strip()
     df["Summary"] = df["Summary"].fillna("").astype(str).str.strip()
     df["norm"] = df["Summary"].apply(normalize)
-    df["Feature"] = df["Summary"].apply(extract_feature)
-    df["Intent"] = df["Summary"].apply(extract_intent)
+
+    df["Main Feature"] = df["Summary"].apply(extract_main_feature)
+    df["Sub Feature"] = df.apply(lambda r: extract_sub_feature(r["Summary"], r["Main Feature"]), axis=1)
+    df["Component"] = df.apply(lambda r: extract_component(r["Summary"], r["Main Feature"], r["Sub Feature"]), axis=1)
+    df["Action"] = df["Summary"].apply(extract_action)
 
     df = df[df["norm"] != ""].reset_index(drop=True)
     return df
@@ -255,15 +568,13 @@ if pool.empty or target.empty:
     st.warning("POOL veya TARGET boş görünüyor.")
     st.stop()
 
-# -------------------------------------------------
-# Exact lookup
-# -------------------------------------------------
+# Exact map
 pool_exact_map = {}
 for _, row in pool.iterrows():
-    pool_exact_map.setdefault(row["Summary"], []).append(row)
+    pool_exact_map.setdefault(row["Summary"], []).append(row.to_dict())
 
 # -------------------------------------------------
-# Embedding model
+# Embeddings
 # -------------------------------------------------
 @st.cache_resource
 def load_model():
@@ -273,11 +584,7 @@ def load_model():
 @st.cache_data(show_spinner=True)
 def build_embeddings(texts: list[str]) -> np.ndarray:
     model = load_model()
-    emb = model.encode(
-        texts,
-        show_progress_bar=False,
-        normalize_embeddings=True
-    )
+    emb = model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
     return np.array(emb, dtype=np.float32)
 
 
@@ -295,11 +602,11 @@ if use_ai:
 # Matching
 # -------------------------------------------------
 results = []
-
 progress = st.progress(0)
 status = st.empty()
 
 for i, t in target.iterrows():
+    t_row = t.to_dict()
     status.text(f"Processing {i + 1}/{len(target)}")
     progress.progress((i + 1) / len(target))
 
@@ -307,39 +614,54 @@ for i, t in target.iterrows():
 
     # EXACT
     exact_hits = pool_exact_map.get(t["Summary"], [])
-    for p in exact_hits:
+    for p_row in exact_hits:
         candidate_rows.append({
-            "Target Key": t["Issue key"],
-            "Target Summary": t["Summary"],
-            "Target Feature": t["Feature"],
-            "Target Intent": t["Intent"],
-            "Pool Key": p["Issue key"],
-            "Pool Summary": p["Summary"],
-            "Pool Feature": p["Feature"],
-            "Pool Intent": p["Intent"],
+            "Target Key": t_row["Issue key"],
+            "Target Summary": t_row["Summary"],
+            "Target Main Feature": t_row["Main Feature"],
+            "Target Sub Feature": t_row["Sub Feature"],
+            "Target Component": t_row["Component"],
+            "Target Action": t_row["Action"],
+            "Pool Key": p_row["Issue key"],
+            "Pool Summary": p_row["Summary"],
+            "Pool Main Feature": p_row["Main Feature"],
+            "Pool Sub Feature": p_row["Sub Feature"],
+            "Pool Component": p_row["Component"],
+            "Pool Action": p_row["Action"],
             "Type": "EXACT",
-            "Score": 1.000
+            "Score": 1.000,
+            "Domain Distance": 0,
+            "Match Reason": build_match_reason("EXACT", t_row, p_row),
         })
 
     # FUZZY
     if not (best_match_only and candidate_rows):
         for _, p in pool.iterrows():
-            if t["Summary"] == p["Summary"]:
+            p_row = p.to_dict()
+
+            if t_row["Summary"] == p_row["Summary"]:
                 continue
 
-            f = fuzzy(t["norm"], p["norm"])
+            f = fuzzy(t_row["norm"], p_row["norm"])
             if f >= fuzzy_threshold:
+                dist = domain_distance(t_row, p_row)
                 candidate_rows.append({
-                    "Target Key": t["Issue key"],
-                    "Target Summary": t["Summary"],
-                    "Target Feature": t["Feature"],
-                    "Target Intent": t["Intent"],
-                    "Pool Key": p["Issue key"],
-                    "Pool Summary": p["Summary"],
-                    "Pool Feature": p["Feature"],
-                    "Pool Intent": p["Intent"],
+                    "Target Key": t_row["Issue key"],
+                    "Target Summary": t_row["Summary"],
+                    "Target Main Feature": t_row["Main Feature"],
+                    "Target Sub Feature": t_row["Sub Feature"],
+                    "Target Component": t_row["Component"],
+                    "Target Action": t_row["Action"],
+                    "Pool Key": p_row["Issue key"],
+                    "Pool Summary": p_row["Summary"],
+                    "Pool Main Feature": p_row["Main Feature"],
+                    "Pool Sub Feature": p_row["Sub Feature"],
+                    "Pool Component": p_row["Component"],
+                    "Pool Action": p_row["Action"],
                     "Type": "FUZZY",
-                    "Score": round(float(f), 3)
+                    "Score": round(float(f), 3),
+                    "Domain Distance": dist,
+                    "Match Reason": build_match_reason("FUZZY", t_row, p_row),
                 })
 
     # SEMANTIC
@@ -349,35 +671,44 @@ for i, t in target.iterrows():
 
         for j in semantic_idx:
             p = pool.iloc[j]
+            p_row = p.to_dict()
 
-            if t["Summary"] == p["Summary"]:
+            if t_row["Summary"] == p_row["Summary"]:
                 continue
 
-            if strict_semantic_context and not semantic_context_ok(t["Summary"], p["Summary"]):
-                continue
-
-            if strict_semantic_intent and not semantic_intent_ok(t["Summary"], p["Summary"]):
+            if use_semantic_guardrail and not semantic_guardrail_ok(t_row, p_row):
                 continue
 
             s = float(semantic_scores[j])
+            dist = domain_distance(t_row, p_row)
 
             candidate_rows.append({
-                "Target Key": t["Issue key"],
-                "Target Summary": t["Summary"],
-                "Target Feature": t["Feature"],
-                "Target Intent": t["Intent"],
-                "Pool Key": p["Issue key"],
-                "Pool Summary": p["Summary"],
-                "Pool Feature": p["Feature"],
-                "Pool Intent": p["Intent"],
+                "Target Key": t_row["Issue key"],
+                "Target Summary": t_row["Summary"],
+                "Target Main Feature": t_row["Main Feature"],
+                "Target Sub Feature": t_row["Sub Feature"],
+                "Target Component": t_row["Component"],
+                "Target Action": t_row["Action"],
+                "Pool Key": p_row["Issue key"],
+                "Pool Summary": p_row["Summary"],
+                "Pool Main Feature": p_row["Main Feature"],
+                "Pool Sub Feature": p_row["Sub Feature"],
+                "Pool Component": p_row["Component"],
+                "Pool Action": p_row["Action"],
                 "Type": "SEMANTIC",
-                "Score": round(s, 3)
+                "Score": round(s, 3),
+                "Domain Distance": dist,
+                "Match Reason": build_match_reason("SEMANTIC", t_row, p_row),
             })
 
     if best_match_only and candidate_rows:
         candidate_rows = sorted(
             candidate_rows,
-            key=lambda x: (score_label(x["Type"]), x["Score"]),
+            key=lambda x: (
+                best_type_rank(x["Type"]),
+                -x["Domain Distance"],
+                x["Score"]
+            ),
             reverse=True
         )
         results.append(candidate_rows[0])
@@ -401,8 +732,8 @@ if not df.empty:
 
     df = (
         df.sort_values(
-            ["Target Key", "Pool Key", "_type_rank", "Score"],
-            ascending=[True, True, False, False]
+            ["Target Key", "_type_rank", "Domain Distance", "Score"],
+            ascending=[True, False, True, False]
         )
         .drop_duplicates(subset=["Target Key", "Pool Key"], keep="first")
         .drop(columns=["_type_rank"])
@@ -422,7 +753,7 @@ if df.empty:
     st.success("Duplicate bulunamadı 🎉")
 else:
     st.subheader("Duplicate Results")
-    st.dataframe(df, use_container_width=True, height=550)
+    st.dataframe(df, use_container_width=True, height=560)
 
     summary = (
         df.groupby("Type", dropna=False)
@@ -430,7 +761,6 @@ else:
         .reset_index(name="Count")
         .sort_values("Count", ascending=False)
     )
-
     st.subheader("Match Summary")
     st.dataframe(summary, use_container_width=True)
 
@@ -446,8 +776,7 @@ else:
 
 if show_debug:
     st.subheader("Debug")
-    st.write("POOL sample")
-    st.dataframe(pool.head(), use_container_width=True)
-
     st.write("TARGET sample")
-    st.dataframe(target.head(), use_container_width=True)
+    st.dataframe(target.head(20), use_container_width=True)
+    st.write("POOL sample")
+    st.dataframe(pool.head(20), use_container_width=True)
