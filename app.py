@@ -19,7 +19,7 @@ SEMANTIC → Yazım farklı olsa da anlam benzerse eşleşme verir
 """)
 
 # -------------------------------------------------
-# Text helpers
+# Basic helpers
 # -------------------------------------------------
 def normalize(text: str) -> str:
     if pd.isna(text):
@@ -46,356 +46,146 @@ def count_matches(text: str, keywords: list[str]) -> int:
     return sum(1 for k in keywords if k in text)
 
 
+def safe_split_tokens(text: str) -> set[str]:
+    return set(normalize(text).split())
+
+
 def match_type_rank(match_type: str) -> int:
     order = {"EXACT": 3, "FUZZY": 2, "SEMANTIC": 1}
     return order.get(match_type, 0)
 
 
 # -------------------------------------------------
-# Domain dictionaries
+# Domain extraction
+# Domain-first approach
 # -------------------------------------------------
-MAIN_FEATURE_KEYWORDS = {
-    "Calls": [
-        "voice call", "video call", "incoming call", "outgoing call", "missed call",
-        "group call", "call history", "recent calls", "dial a number", "arama",
-        "görüşme", "gorusme", "çağrı", "cagri", "voip", "ringing"
-    ],
-    "Chats": [
-        "chat", "chats", "message", "messages", "conversation", "mesaj", "sohbet",
-        "reply", "forward", "bubble", "sticker", "emoji", "dictation",
-        "starred messages", "my reminders", "secret message",
-        "voice message", "voice note", "audio message", "ses kaydı", "ses kaydi",
-        "sesli mesaj", "text message", "one to one chat", "group chat",
-        "resim", "image", "photo", "gallery"
-    ],
-    "Status": [
-        "status", "my status", "text story", "story", "stories", "durum", "hikaye"
-    ],
-    "Channels": [
-        "channel", "channels", "discover", "following", "service info", "channel info",
-        "kanal"
-    ],
-    "More": [
-        "profile", "bip web", "storage management", "blocked contacts",
-        "my account", "appearance", "apperance", "help", "emergency", "paycell",
-        "settings", "chat settings", "privacy", "notifications", "ayar", "bildirim",
-        "gizlilik", "profil"
-    ],
-}
-
-SUB_FEATURE_KEYWORDS = {
-    "Chats_List": [
-        "chat list", "filter", "unread", "pin", "archive", "archived chats",
-        "select chat", "select all", "read all", "scroll right", "scroll left",
-        "delete chat", "clear chat", "export chat", "sık konuşulanlar",
-        "sik konusulanlar", "frequently contacted", "frequent"
-    ],
-    "Chats_OneToOne": [
-        "one to one chat", "contact header", "contact info", "profile photo",
-        "chat search", "secret message", "translate settings",
-        "groups in common", "view in adress book", "view in address book"
-    ],
-    "Chats_Group": [
-        "group chat", "group subject", "group scheduler", "group settings",
-        "add participants", "member", "make admin", "remove from group", "exit group",
-        "invite with link", "reply privately"
-    ],
-    "Chats_Attachments": [
-        "plus attach", "attach", "gallery", "document", "contact", "location",
-        "poll", "camera", "instant video", "send money", "resim", "image", "photo"
-    ],
-    "Chats_Reminders": [
-        "my reminders", "set reminder", "reminder", "reminders", "hatırlatıcı", "hatirlatici"
-    ],
-    "Chats_Starred": [
-        "starred", "starred messages", "star"
-    ],
-    "Chats_Search": [
-        "chat search", "search", "arama"
-    ],
-    "Chats_VoiceMessage": [
-        "voice message", "voice note", "audio message", "ses kaydı", "ses kaydi",
-        "sesli mesaj", "playback", "play", "pause", "seek", "rewind", "ileri sar",
-        "duration", "süre", "sure", "waveform"
-    ],
-    "Calls_List": [
-        "recent calls", "call history", "missed", "all calls", "favorites"
-    ],
-    "Calls_NewGroup": [
-        "new group call", "group call"
-    ],
-    "Calls_Dialer": [
-        "dial a number", "new contact", "delete number"
-    ],
-    "Calls_Voice": [
-        "voice call", "incoming voice call", "outgoing voice call"
-    ],
-    "Calls_Video": [
-        "video call", "incoming video call", "outgoing video call"
-    ],
-    "Status_Status": [
-        "status", "my status"
-    ],
-    "Status_Camera": [
-        "camera"
-    ],
-    "Status_TextStory": [
-        "text story"
-    ],
-    "Channels_List": [
-        "following", "discover", "filter", "search", "archive", "delete"
-    ],
-    "Channels_Info": [
-        "service info", "channel info"
-    ],
-    "More_Profile": [
-        "profile", "photo", "name", "customize", "games", "paycell", "emergency",
-        "starred", "bip web", "invite"
-    ],
-    "More_Settings": [
-        "settings", "chat settings", "backup", "chat wallpaper", "automatic download",
-        "save to gallery", "read receipts", "storage management", "notifications",
-        "blocked contacts", "my account", "privacy", "appearance", "apperance", "help"
-    ],
-}
-
-COMPONENT_KEYWORDS = {
-    "Frequent_Contacts": [
-        "sık konuşulanlar", "sik konusulanlar", "frequently contacted", "frequent"
-    ],
-    "Reply": [
-        "reply", "reply edilen", "yanıt", "yanit", "reply privately"
-    ],
-    "Forward": [
-        "forward", "forwarded", "ilet", "share"
-    ],
-    "Voice_Message": [
-        "voice message", "voice note", "audio message", "ses kaydı", "ses kaydi",
-        "sesli mesaj"
-    ],
-    "Voice_Message_Playback": [
-        "playback", "play", "pause", "seek", "rewind", "ileri sar", "duration",
-        "süre", "sure", "waveform"
-    ],
-    "Bubble_UI": [
-        "bubble", "alignment", "position", "size", "height", "width", "dik", "yatay",
-        "büyüklük", "buyukluk"
-    ],
-    "Search": [
-        "search", "arama", "search icon"
-    ],
-    "Starred": [
-        "starred", "starred messages", "star"
-    ],
-    "Reminder": [
-        "my reminders", "set reminder", "reminder", "reminders", "hatırlatıcı", "hatirlatici"
-    ],
-    "Sticker": [
-        "sticker"
-    ],
-    "Emoji": [
-        "emoji"
-    ],
-    "Reaction": [
-        "reaction"
-    ],
-    "Text_Message": [
-        "text message", "message"
-    ],
-    "Camera": [
-        "camera", "instant video"
-    ],
-    "Gallery_Image": [
-        "gallery", "resim", "image", "photo", "görsel", "gorsel"
-    ],
-    "Document": [
-        "document", "docs"
-    ],
-    "Location": [
-        "location", "konum"
-    ],
-    "Poll": [
-        "poll"
-    ],
-    "Secret_Message": [
-        "secret message"
-    ],
-    "Notifications": [
-        "notification", "notifications", "bildirim"
-    ],
-    "Contact_Info": [
-        "contact info", "contact header", "phone number", "contact name"
-    ],
-    "Call_Voice": [
-        "voice call", "incoming voice call", "outgoing voice call"
-    ],
-    "Call_Video": [
-        "video call", "incoming video call", "outgoing video call"
-    ],
-    "Call_History": [
-        "recent calls", "call history", "missed call", "favorites"
-    ],
-    "Dialer": [
-        "dial a number", "new contact", "delete number"
-    ],
-}
-
-ACTION_KEYWORDS = {
-    "Crash": [
-        "crash", "crashes", "crashed", "çök", "cok"
-    ],
-    "Freeze_Open": [
-        "uygulama dondu", "dondu", "freeze", "frozen", "açılmadı", "acilmadi",
-        "not opening", "cannot open", "open", "opening"
-    ],
-    "Load_Display": [
-        "load", "loading", "yüklen", "yuklen", "appear", "display", "gelmiyor",
-        "görünm", "goster", "göster", "listelen"
-    ],
-    "Send": [
-        "send", "sending", "gönder", "gonder"
-    ],
-    "Receive": [
-        "receive", "received", "gel", "al"
-    ],
-    "Reply": [
-        "reply", "reply edilen", "yanıt", "yanit"
-    ],
-    "Forward": [
-        "forward", "forwarded", "ilet", "share"
-    ],
-    "Playback": [
-        "play", "pause", "rewind", "seek", "ileri sar", "duration", "süre", "sure"
-    ],
-    "Search": [
-        "search", "arama"
-    ],
-    "Delete": [
-        "delete", "deleted", "sil"
-    ],
-    "Edit": [
-        "edit", "edited", "düzenle", "duzenle"
-    ],
-    "Layout_UI": [
-        "alignment", "position", "size", "height", "width", "dik", "yatay",
-        "büyüklük", "buyukluk", "spacing", "fade", "faded", "ui"
-    ],
-    "Call": [
-        "voice call", "video call", "call", "arama", "görüşme", "gorusme"
-    ],
-}
-
-FAILURE_MODE_KEYWORDS = {
-    "App_Freeze_Launch": [
-        "uygulama dondu", "dondu", "freeze", "frozen", "açılmadı", "acilmadi",
-        "app not opening", "not opening", "cannot open", "launch", "startup"
-    ],
-    "Crash": [
-        "crash", "crashes", "crashed", "çök", "cok"
-    ],
-    "Media_Load": [
-        "resim load", "image load", "photo load", "media load", "yüklenmiyor",
-        "yuklenmiyor", "load problemi", "loading problem", "resim", "image", "photo"
-    ],
-    "Voice_Playback": [
-        "ses kaydı", "ses kaydi", "voice message", "audio message", "playback",
-        "play", "pause", "rewind", "seek", "ileri sar", "duration", "süre", "sure"
-    ],
-    "UI_Layout": [
-        "alignment", "position", "size", "height", "width", "bubble", "dik", "yatay",
-        "büyüklük", "buyukluk", "spacing", "fade", "faded"
-    ],
-    "Load_Display": [
-        "load", "loading", "appear", "display", "gelmiyor", "görünm", "listelen"
-    ],
-}
-
-
-# -------------------------------------------------
-# Soft parsing
-# -------------------------------------------------
-def extract_main_feature(text: str) -> str:
+def extract_module(text: str) -> str:
     t = normalize(text)
-    best_name = "Other"
-    best_score = 0
 
-    for name, keywords in MAIN_FEATURE_KEYWORDS.items():
-        score = count_matches(t, keywords)
-        if score > best_score:
-            best_score = score
-            best_name = name
-
-    if contains_any(t, ["voice call", "video call", "incoming call", "outgoing call", "group call", "call history"]):
+    if contains_any(t, [
+        "voice call", "video call", "incoming call", "outgoing call",
+        "group call", "call history", "recent calls", "missed call",
+        "arama", "görüşme", "gorusme", "çağrı", "cagri", "voip"
+    ]):
         return "Calls"
 
-    if contains_any(t, ["voice message", "voice note", "audio message", "ses kaydı", "ses kaydi", "sesli mesaj"]):
+    if contains_any(t, [
+        "status", "story", "my status", "text story", "durum", "hikaye"
+    ]):
+        return "Status"
+
+    if contains_any(t, [
+        "channel", "channels", "discover", "following", "service info",
+        "channel info", "kanal"
+    ]):
+        return "Channels"
+
+    if contains_any(t, [
+        "profile", "settings", "privacy", "notifications", "storage management",
+        "my account", "appearance", "apperance", "help", "blocked contacts",
+        "bip web", "paycell", "profil", "ayar", "gizlilik", "bildirim"
+    ]):
+        return "More"
+
+    if contains_any(t, [
+        "chat", "message", "messages", "conversation", "reply", "forward",
+        "bubble", "voice message", "voice note", "audio message",
+        "ses kaydı", "ses kaydi", "sesli mesaj", "sticker", "emoji",
+        "my reminders", "starred messages", "text message", "medya", "media",
+        "resim", "image", "photo", "gallery", "mesaj", "sohbet"
+    ]):
         return "Chats"
 
-    return best_name
+    return "Other"
 
 
-def extract_sub_feature(text: str, main_feature: str | None = None) -> str:
+def extract_object(text: str) -> str:
     t = normalize(text)
-    mf = main_feature or extract_main_feature(text)
 
-    candidates = {name: kws for name, kws in SUB_FEATURE_KEYWORDS.items() if name.startswith(mf)}
-    best_name = f"{mf}_General" if mf != "Other" else "Other"
-    best_score = 0
-
-    for name, keywords in candidates.items():
-        score = count_matches(t, keywords)
-        if score > best_score:
-            best_score = score
-            best_name = name
-
-    if mf == "Chats":
-        if contains_any(t, ["voice message", "voice note", "audio message", "ses kaydı", "ses kaydi", "sesli mesaj"]):
-            return "Chats_VoiceMessage"
-        if contains_any(t, ["my reminders", "set reminder", "reminder", "reminders", "hatırlatıcı", "hatirlatici"]):
-            return "Chats_Reminders"
-        if contains_any(t, ["starred", "starred messages", "star"]):
-            return "Chats_Starred"
-        if contains_any(t, ["group chat"]):
-            return "Chats_Group"
-        if contains_any(t, ["gallery", "document", "location", "poll", "camera", "instant video", "attach", "resim", "image", "photo"]):
-            return "Chats_Attachments"
-        if contains_any(t, ["sık konuşulanlar", "sik konusulanlar", "frequently contacted", "frequent", "chat list", "archive"]):
-            return "Chats_List"
-
-    if mf == "Calls":
-        if contains_any(t, ["voice call", "incoming voice call", "outgoing voice call"]):
-            return "Calls_Voice"
-        if contains_any(t, ["video call", "incoming video call", "outgoing video call"]):
-            return "Calls_Video"
-        if contains_any(t, ["dial a number", "new contact", "delete number"]):
-            return "Calls_Dialer"
-        if contains_any(t, ["new group call", "group call"]):
-            return "Calls_NewGroup"
-
-    return best_name
-
-
-def extract_component(text: str) -> str:
-    t = normalize(text)
+    object_map = {
+        "Frequent_Contacts": [
+            "sık konuşulanlar", "sik konusulanlar", "frequently contacted", "frequent"
+        ],
+        "Media_Display": [
+            "medya gösterim", "medya", "media", "resim", "image", "photo",
+            "gallery", "görsel", "gorsel"
+        ],
+        "Voice_Message": [
+            "voice message", "voice note", "audio message", "ses kaydı",
+            "ses kaydi", "sesli mesaj"
+        ],
+        "Voice_Message_Playback": [
+            "playback", "play", "pause", "seek", "rewind", "ileri sar",
+            "duration", "süre", "sure", "waveform"
+        ],
+        "Reply": [
+            "reply", "reply edilen", "yanıt", "yanit", "reply privately"
+        ],
+        "Forward": [
+            "forward", "forwarded", "ilet", "share"
+        ],
+        "Bubble": [
+            "bubble", "alignment", "position", "size", "height", "width",
+            "dik", "yatay", "büyüklük", "buyukluk"
+        ],
+        "Reminder": [
+            "my reminders", "reminder", "reminders", "set reminder",
+            "hatırlatıcı", "hatirlatici"
+        ],
+        "Starred": [
+            "starred", "starred messages", "star"
+        ],
+        "Search": [
+            "search", "arama", "search icon"
+        ],
+        "Sticker": [
+            "sticker"
+        ],
+        "Emoji": [
+            "emoji"
+        ],
+        "Reaction": [
+            "reaction"
+        ],
+        "Document": [
+            "document", "docs"
+        ],
+        "Location": [
+            "location", "konum"
+        ],
+        "Poll": [
+            "poll"
+        ],
+        "Call_Voice": [
+            "voice call", "incoming voice call", "outgoing voice call"
+        ],
+        "Call_Video": [
+            "video call", "incoming video call", "outgoing video call"
+        ],
+        "Call_History": [
+            "recent calls", "call history", "missed call"
+        ],
+        "Dialer": [
+            "dial a number", "new contact", "delete number"
+        ],
+        "Status": [
+            "status", "my status"
+        ],
+        "Camera": [
+            "camera"
+        ],
+        "Text_Story": [
+            "text story"
+        ],
+    }
 
     best_name = "General"
     best_score = 0
-    for name, keywords in COMPONENT_KEYWORDS.items():
+    for name, keywords in object_map.items():
         score = count_matches(t, keywords)
         if score > best_score:
             best_score = score
             best_name = name
-
-    if contains_any(t, ["voice message", "voice note", "audio message", "ses kaydı", "ses kaydi", "sesli mesaj"]):
-        if contains_any(t, ["playback", "play", "pause", "seek", "rewind", "ileri sar", "duration", "süre", "sure", "waveform"]):
-            return "Voice_Message_Playback"
-        return "Voice_Message"
-
-    if contains_any(t, ["voice call", "incoming voice call", "outgoing voice call"]):
-        return "Call_Voice"
-
-    if contains_any(t, ["video call", "incoming video call", "outgoing video call"]):
-        return "Call_Video"
 
     return best_name
 
@@ -403,108 +193,136 @@ def extract_component(text: str) -> str:
 def extract_action(text: str) -> str:
     t = normalize(text)
 
-    best_name = "General"
-    best_score = 0
-    for name, keywords in ACTION_KEYWORDS.items():
-        score = count_matches(t, keywords)
-        if score > best_score:
-            best_score = score
-            best_name = name
-
-    return best_name
-
-
-def extract_failure_mode(text: str) -> str:
-    t = normalize(text)
-
-    best_name = "General"
-    best_score = 0
-    for name, keywords in FAILURE_MODE_KEYWORDS.items():
-        score = count_matches(t, keywords)
-        if score > best_score:
-            best_score = score
-            best_name = name
-
-    return best_name
-
-
-def domain_distance(row_a: dict, row_b: dict) -> int:
-    penalty = 0
-    if row_a["Main Feature"] != row_b["Main Feature"]:
-        penalty += 4
-    if row_a["Sub Feature"] != row_b["Sub Feature"]:
-        penalty += 3
-    if row_a["Component"] != row_b["Component"]:
-        penalty += 2
-    if row_a["Action"] != row_b["Action"]:
-        penalty += 1
-    if row_a["Failure Mode"] != row_b["Failure Mode"]:
-        penalty += 3
-    return penalty
-
-
-def semantic_guardrail_ok(row_a: dict, row_b: dict) -> bool:
-    if row_a["Main Feature"] != row_b["Main Feature"]:
-        return False
-
-    if row_a["Failure Mode"] != "General" and row_b["Failure Mode"] != "General":
-        if row_a["Failure Mode"] != row_b["Failure Mode"]:
-            return False
-
-    voice_message_components = {"Voice_Message", "Voice_Message_Playback"}
-    call_components = {"Call_Voice", "Call_Video"}
-
-    if (
-        row_a["Component"] in voice_message_components and row_b["Component"] in call_components
-    ) or (
-        row_b["Component"] in voice_message_components and row_a["Component"] in call_components
-    ):
-        return False
-
-    strong_components = {
-        "Frequent_Contacts",
-        "Voice_Message",
-        "Voice_Message_Playback",
-        "Reply",
-        "Forward",
-        "Reminder",
-        "Starred",
-        "Search",
-        "Call_Voice",
-        "Call_Video",
-        "Gallery_Image",
-        "Camera",
-        "Document",
+    action_map = {
+        "Crash": ["crash", "crashes", "crashed", "çök", "cok"],
+        "Freeze_Open": [
+            "uygulama dondu", "dondu", "freeze", "frozen", "açılmadı",
+            "acilmadi", "not opening", "cannot open", "open", "opening"
+        ],
+        "Load_Display": [
+            "load", "loading", "yüklen", "yuklen", "display", "show",
+            "appear", "gelmiyor", "görünm", "goster", "göster", "listelen"
+        ],
+        "Send": ["send", "sending", "gönder", "gonder"],
+        "Receive": ["receive", "received", "gel", "al"],
+        "Reply": ["reply", "reply edilen", "yanıt", "yanit"],
+        "Forward": ["forward", "forwarded", "ilet", "share"],
+        "Playback": ["play", "pause", "seek", "rewind", "ileri sar", "duration", "süre", "sure"],
+        "Search": ["search", "arama"],
+        "Delete": ["delete", "deleted", "sil"],
+        "Edit": ["edit", "edited", "düzenle", "duzenle"],
+        "UI_Layout": [
+            "alignment", "position", "size", "height", "width", "dik",
+            "yatay", "büyüklük", "buyukluk", "spacing", "fade", "faded", "ui"
+        ],
+        "Call": ["call", "arama", "görüşme", "gorusme"],
     }
 
-    if row_a["Component"] in strong_components and row_b["Component"] in strong_components:
-        if row_a["Component"] != row_b["Component"]:
+    best_name = "General"
+    best_score = 0
+    for name, keywords in action_map.items():
+        score = count_matches(t, keywords)
+        if score > best_score:
+            best_score = score
+            best_name = name
+
+    return best_name
+
+
+def extract_failure(text: str) -> str:
+    t = normalize(text)
+
+    failure_map = {
+        "App_Freeze": [
+            "uygulama dondu", "dondu", "freeze", "frozen", "açılmadı",
+            "acilmadi", "not opening", "cannot open", "launch", "startup"
+        ],
+        "Crash": ["crash", "crashes", "crashed", "çök", "cok"],
+        "Load_Failure": [
+            "load problemi", "loading problem", "yüklenmiyor", "yuklenmiyor",
+            "gelmiyor", "listelenmiyor", "görünmüyor", "gorunmuyor"
+        ],
+        "Playback_Failure": [
+            "playback", "play", "pause", "rewind", "seek", "ileri sar",
+            "duration", "süre", "sure"
+        ],
+        "UI_Layout": [
+            "alignment", "position", "size", "height", "width", "bubble",
+            "dik", "yatay", "büyüklük", "buyukluk", "spacing", "fade", "faded"
+        ],
+        "General_Display": [
+            "display", "show", "appear", "göster", "goster"
+        ],
+    }
+
+    best_name = "General"
+    best_score = 0
+    for name, keywords in failure_map.items():
+        score = count_matches(t, keywords)
+        if score > best_score:
+            best_score = score
+            best_name = name
+
+    return best_name
+
+
+# -------------------------------------------------
+# Domain-first candidate filter
+# -------------------------------------------------
+def domain_gate(a: dict, b: dict) -> bool:
+    # 1) module farklıysa direkt red
+    if a["Module"] != b["Module"]:
+        return False
+
+    # 2) object ikisi de spesifikse ve farklıysa red
+    if a["Object"] != "General" and b["Object"] != "General":
+        if a["Object"] != b["Object"]:
             return False
 
+    # 3) failure ikisi de spesifikse ve farklıysa red
+    if a["Failure"] != "General" and b["Failure"] != "General":
+        if a["Failure"] != b["Failure"]:
+            return False
+
+    # 4) action ikisi de güçlü aksiyonsa ve farklıysa red
     strong_actions = {"Reply", "Forward", "Playback", "Call", "Search", "Freeze_Open"}
-    if row_a["Action"] in strong_actions and row_b["Action"] in strong_actions:
-        if row_a["Action"] != row_b["Action"]:
+    if a["Action"] in strong_actions and b["Action"] in strong_actions:
+        if a["Action"] != b["Action"]:
             return False
 
-    if (
-        row_a["Sub Feature"] not in {"Other", f'{row_a["Main Feature"]}_General'} and
-        row_b["Sub Feature"] not in {"Other", f'{row_b["Main Feature"]}_General'} and
-        row_a["Sub Feature"] != row_b["Sub Feature"]
-    ):
+    # 5) kritik ayrım: call vs voice message
+    call_objects = {"Call_Voice", "Call_Video", "Call_History", "Dialer"}
+    voice_objects = {"Voice_Message", "Voice_Message_Playback"}
+
+    if (a["Object"] in call_objects and b["Object"] in voice_objects) or \
+       (b["Object"] in call_objects and a["Object"] in voice_objects):
         return False
 
     return True
 
 
-def build_match_reason(match_type: str, row_a: dict, row_b: dict) -> str:
+def domain_distance(a: dict, b: dict) -> int:
+    score = 0
+    if a["Module"] != b["Module"]:
+        score += 5
+    if a["Object"] != b["Object"]:
+        score += 4
+    if a["Action"] != b["Action"]:
+        score += 2
+    if a["Failure"] != b["Failure"]:
+        score += 3
+    return score
+
+
+def build_reason(match_type: str, a: dict, b: dict) -> str:
     if match_type == "EXACT":
         return "EXACT_TEXT"
     if match_type == "FUZZY":
         return "FUZZY_SIMILAR_TEXT"
-    if row_a["Failure Mode"] == row_b["Failure Mode"] and row_a["Failure Mode"] != "General":
-        return f'SEMANTIC_SAME_FAILURE:{row_a["Failure Mode"]}'
-    if row_a["Component"] == row_b["Component"] and row_a["Component"] != "General":
-        return f'SEMANTIC_SAME_COMPONENT:{row_a["Component"]}'
+    if a["Object"] == b["Object"] and a["Object"] != "General":
+        return f'SEMANTIC_SAME_OBJECT:{a["Object"]}'
+    if a["Failure"] == b["Failure"] and a["Failure"] != "General":
+        return f'SEMANTIC_SAME_FAILURE:{a["Failure"]}'
     return "SEMANTIC_GENERAL"
 
 
@@ -514,10 +332,10 @@ def build_match_reason(match_type: str, row_a: dict, row_b: dict) -> str:
 with st.sidebar:
     delimiter = st.selectbox("CSV delimiter", [";", ","], index=0)
     fuzzy_threshold = st.slider("Fuzzy threshold", 0.70, 1.00, 0.90, 0.01)
-    semantic_threshold = st.slider("Semantic threshold", 0.70, 1.00, 0.84, 0.01)
+    semantic_threshold = st.slider("Semantic threshold", 0.70, 1.00, 0.85, 0.01)
     use_ai = st.toggle("Enable Semantic AI", value=True)
     best_match_only = st.toggle("Best match only", value=True)
-    use_semantic_guardrail = st.toggle("Use domain guardrail", value=True)
+    use_domain_gate = st.toggle("Use domain-first filter", value=True)
     show_debug = st.toggle("Show debug info", value=False)
 
 pool_file = st.file_uploader("POOL CSV", type=["csv"])
@@ -531,7 +349,7 @@ if not run:
     st.stop()
 
 # -------------------------------------------------
-# Load CSV
+# Load
 # -------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_csv(file_bytes: bytes, delimiter: str) -> pd.DataFrame:
@@ -551,11 +369,10 @@ def load_csv(file_bytes: bytes, delimiter: str) -> pd.DataFrame:
     df["Summary"] = df["Summary"].fillna("").astype(str).str.strip()
     df["norm"] = df["Summary"].apply(normalize)
 
-    df["Main Feature"] = df["Summary"].apply(extract_main_feature)
-    df["Sub Feature"] = df.apply(lambda r: extract_sub_feature(r["Summary"], r["Main Feature"]), axis=1)
-    df["Component"] = df["Summary"].apply(extract_component)
+    df["Module"] = df["Summary"].apply(extract_module)
+    df["Object"] = df["Summary"].apply(extract_object)
     df["Action"] = df["Summary"].apply(extract_action)
-    df["Failure Mode"] = df["Summary"].apply(extract_failure_mode)
+    df["Failure"] = df["Summary"].apply(extract_failure)
 
     df = df[df["norm"] != ""].reset_index(drop=True)
     return df
@@ -572,6 +389,9 @@ if pool.empty or target.empty:
     st.warning("POOL veya TARGET boş görünüyor.")
     st.stop()
 
+# -------------------------------------------------
+# Exact map
+# -------------------------------------------------
 pool_exact_map = {}
 for _, row in pool.iterrows():
     pool_exact_map.setdefault(row["Summary"], []).append(row.to_dict())
@@ -620,22 +440,20 @@ for i, t in target.iterrows():
         candidate_rows.append({
             "Target Key": t_row["Issue key"],
             "Target Summary": t_row["Summary"],
-            "Target Main Feature": t_row["Main Feature"],
-            "Target Sub Feature": t_row["Sub Feature"],
-            "Target Component": t_row["Component"],
+            "Target Module": t_row["Module"],
+            "Target Object": t_row["Object"],
             "Target Action": t_row["Action"],
-            "Target Failure Mode": t_row["Failure Mode"],
+            "Target Failure": t_row["Failure"],
             "Pool Key": p_row["Issue key"],
             "Pool Summary": p_row["Summary"],
-            "Pool Main Feature": p_row["Main Feature"],
-            "Pool Sub Feature": p_row["Sub Feature"],
-            "Pool Component": p_row["Component"],
+            "Pool Module": p_row["Module"],
+            "Pool Object": p_row["Object"],
             "Pool Action": p_row["Action"],
-            "Pool Failure Mode": p_row["Failure Mode"],
+            "Pool Failure": p_row["Failure"],
             "Type": "EXACT",
             "Score": 1.000,
             "Domain Distance": 0,
-            "Match Reason": build_match_reason("EXACT", t_row, p_row),
+            "Match Reason": build_reason("EXACT", t_row, p_row),
         })
 
     # FUZZY
@@ -646,28 +464,28 @@ for i, t in target.iterrows():
             if t_row["Summary"] == p_row["Summary"]:
                 continue
 
+            if use_domain_gate and not domain_gate(t_row, p_row):
+                continue
+
             f = fuzzy(t_row["norm"], p_row["norm"])
             if f >= fuzzy_threshold:
-                dist = domain_distance(t_row, p_row)
                 candidate_rows.append({
                     "Target Key": t_row["Issue key"],
                     "Target Summary": t_row["Summary"],
-                    "Target Main Feature": t_row["Main Feature"],
-                    "Target Sub Feature": t_row["Sub Feature"],
-                    "Target Component": t_row["Component"],
+                    "Target Module": t_row["Module"],
+                    "Target Object": t_row["Object"],
                     "Target Action": t_row["Action"],
-                    "Target Failure Mode": t_row["Failure Mode"],
+                    "Target Failure": t_row["Failure"],
                     "Pool Key": p_row["Issue key"],
                     "Pool Summary": p_row["Summary"],
-                    "Pool Main Feature": p_row["Main Feature"],
-                    "Pool Sub Feature": p_row["Sub Feature"],
-                    "Pool Component": p_row["Component"],
+                    "Pool Module": p_row["Module"],
+                    "Pool Object": p_row["Object"],
                     "Pool Action": p_row["Action"],
-                    "Pool Failure Mode": p_row["Failure Mode"],
+                    "Pool Failure": p_row["Failure"],
                     "Type": "FUZZY",
                     "Score": round(float(f), 3),
-                    "Domain Distance": dist,
-                    "Match Reason": build_match_reason("FUZZY", t_row, p_row),
+                    "Domain Distance": domain_distance(t_row, p_row),
+                    "Match Reason": build_reason("FUZZY", t_row, p_row),
                 })
 
     # SEMANTIC
@@ -682,31 +500,28 @@ for i, t in target.iterrows():
             if t_row["Summary"] == p_row["Summary"]:
                 continue
 
-            if use_semantic_guardrail and not semantic_guardrail_ok(t_row, p_row):
+            if use_domain_gate and not domain_gate(t_row, p_row):
                 continue
 
             s = float(semantic_scores[j])
-            dist = domain_distance(t_row, p_row)
 
             candidate_rows.append({
                 "Target Key": t_row["Issue key"],
                 "Target Summary": t_row["Summary"],
-                "Target Main Feature": t_row["Main Feature"],
-                "Target Sub Feature": t_row["Sub Feature"],
-                "Target Component": t_row["Component"],
+                "Target Module": t_row["Module"],
+                "Target Object": t_row["Object"],
                 "Target Action": t_row["Action"],
-                "Target Failure Mode": t_row["Failure Mode"],
+                "Target Failure": t_row["Failure"],
                 "Pool Key": p_row["Issue key"],
                 "Pool Summary": p_row["Summary"],
-                "Pool Main Feature": p_row["Main Feature"],
-                "Pool Sub Feature": p_row["Sub Feature"],
-                "Pool Component": p_row["Component"],
+                "Pool Module": p_row["Module"],
+                "Pool Object": p_row["Object"],
                 "Pool Action": p_row["Action"],
-                "Pool Failure Mode": p_row["Failure Mode"],
+                "Pool Failure": p_row["Failure"],
                 "Type": "SEMANTIC",
                 "Score": round(s, 3),
-                "Domain Distance": dist,
-                "Match Reason": build_match_reason("SEMANTIC", t_row, p_row),
+                "Domain Distance": domain_distance(t_row, p_row),
+                "Match Reason": build_reason("SEMANTIC", t_row, p_row),
             })
 
     if best_match_only and candidate_rows:
