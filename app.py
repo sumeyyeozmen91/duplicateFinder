@@ -9,8 +9,8 @@ from sentence_transformers import SentenceTransformer
 
 st.set_page_config(page_title="BSDV_DUP_CHECK_AI", layout="wide")
 
-st.title("BSDV — AI Duplicate Bug Checker")
-st.caption("EXACT + FUZZY + SEMANTIC (TR + EN destekli)")
+st.title("BSDV — AI Similar Bug Candidate Finder")
+st.caption("EXACT + FUZZY + SEMANTIC candidate retrieval")
 
 st.markdown("""
 EXACT → Summary birebir aynıysa eşleşme verir  
@@ -24,7 +24,6 @@ SEMANTIC → Yazım farklı olsa da anlam benzerse eşleşme verir
 def normalize(text: str) -> str:
     if pd.isna(text):
         return ""
-
     text = str(text).strip().lower()
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("/", " ")
@@ -44,137 +43,6 @@ def match_type_rank(match_type: str) -> int:
     return order.get(match_type, 0)
 
 
-def contains_any(text: str, keywords: list[str]) -> bool:
-    return any(k in text for k in keywords)
-
-
-def count_matches(text: str, keywords: list[str]) -> int:
-    return sum(1 for k in keywords if k in text)
-
-
-# -------------------------------------------------
-# Mini filter: Top Module
-# -------------------------------------------------
-def extract_top_module(summary: str) -> str:
-    s = normalize(summary)
-
-    if contains_any(s, ["mesajlar", "messages", "chat", "chats", "mesaj", "sohbet"]):
-        return "Messages"
-
-    if contains_any(s, ["aramalar", "calls", "call", "arama", "görüşme", "gorusme"]):
-        return "Calls"
-
-    if contains_any(s, ["kanallar", "channels", "channel", "kanal"]):
-        return "Channels"
-
-    if contains_any(s, ["status", "story", "stories", "durum", "hikaye"]):
-        return "Status"
-
-    if contains_any(s, ["more", "settings", "profile", "ayar", "profil", "privacy", "notifications"]):
-        return "More"
-
-    return "Other"
-
-
-# -------------------------------------------------
-# Mini filter: Object Label
-# This does NOT decide duplicate.
-# It only blocks very absurd matches.
-# -------------------------------------------------
-OBJECT_PATTERNS = {
-    "Frequent_Contacts": [
-        "sık konuşulanlar", "sik konusulanlar", "frequently contacted", "frequent contacts"
-    ],
-    "Voice_Message": [
-        "ses kaydı", "ses kaydi", "voice message", "voice note", "audio message", "sesli mesaj"
-    ],
-    "Voice_Message_Playback": [
-        "ileri sar", "rewind", "seek", "playback", "duration", "süre", "sure", "pause", "play"
-    ],
-    "Media": [
-        "medya", "media", "resim", "image", "photo", "görsel", "gorsel", "gallery"
-    ],
-    "Bubble": [
-        "bubble", "alignment", "position", "dik", "yatay", "büyüklük", "buyukluk", "size"
-    ],
-    "Reply": [
-        "reply", "reply edilen", "yanıt", "yanit", "reply privately"
-    ],
-    "Forward": [
-        "forward", "forwarded", "ilet", "share"
-    ],
-    "Search": [
-        "search", "arama", "search icon"
-    ],
-    "Reminder": [
-        "reminder", "reminders", "my reminders", "set reminder", "hatırlatıcı", "hatirlatici"
-    ],
-    "Starred": [
-        "starred", "starred messages", "star"
-    ],
-    "Call_Voice": [
-        "voice call", "incoming voice call", "outgoing voice call"
-    ],
-    "Call_Video": [
-        "video call", "incoming video call", "outgoing video call"
-    ],
-    "Connection": [
-        "connection", "bağlan", "baglan", "network", "internet"
-    ],
-    "Freeze": [
-        "uygulama dondu", "dondu", "freeze", "frozen", "açılmadı", "acilmadi", "not opening"
-    ],
-    "Crash": [
-        "crash", "crashes", "crashed", "çök", "cok"
-    ],
-    "Link_Share": [
-        "channel link", "share link", "link paylaş", "link paylas", "share channel link"
-    ],
-    "Mention": [
-        "mention", "@"
-    ],
-}
-
-
-def extract_object_label(summary: str) -> str:
-    s = normalize(summary)
-
-    best_label = "General"
-    best_score = 0
-
-    for label, patterns in OBJECT_PATTERNS.items():
-        score = count_matches(s, patterns)
-        if score > best_score:
-            best_score = score
-            best_label = label
-
-    return best_label
-
-
-def mini_filter_ok(target_row: dict, pool_row: dict) -> bool:
-    # 1) Top module farklıysa ele
-    if target_row["Top Module"] != pool_row["Top Module"]:
-        return False
-
-    # 2) İkisinde de net obje varsa ve farklıysa ele
-    if target_row["Object Label"] != "General" and pool_row["Object Label"] != "General":
-        if target_row["Object Label"] != pool_row["Object Label"]:
-            return False
-
-    # 3) Voice message ile voice/video call karışmasın
-    voice_message_labels = {"Voice_Message", "Voice_Message_Playback"}
-    call_labels = {"Call_Voice", "Call_Video"}
-
-    if (
-        target_row["Object Label"] in voice_message_labels and pool_row["Object Label"] in call_labels
-    ) or (
-        pool_row["Object Label"] in voice_message_labels and target_row["Object Label"] in call_labels
-    ):
-        return False
-
-    return True
-
-
 # -------------------------------------------------
 # Sidebar
 # -------------------------------------------------
@@ -183,13 +51,13 @@ with st.sidebar:
     fuzzy_threshold = st.slider("Fuzzy threshold", 0.70, 1.00, 0.90, 0.01)
     semantic_threshold = st.slider("Semantic threshold", 0.70, 1.00, 0.85, 0.01)
     use_ai = st.toggle("Enable Semantic AI", value=True)
-    best_match_only = st.toggle("Best match only", value=True)
-    use_mini_filter = st.toggle("Use mini absurd-match filter", value=True)
+    best_match_only = st.toggle("Best match only", value=False)
+    top_k_semantic = st.slider("Top-K semantic candidates per target", 1, 20, 5)
     show_debug = st.toggle("Show debug info", value=False)
 
 pool_file = st.file_uploader("POOL CSV", type=["csv"])
 target_file = st.file_uploader("TARGET CSV", type=["csv"])
-run = st.button("🔍 Find Similar Bugs")
+run = st.button("🔍 Find Similar Candidates")
 
 if not pool_file or not target_file:
     st.stop()
@@ -217,8 +85,6 @@ def load_csv(file_bytes: bytes, delimiter: str) -> pd.DataFrame:
     df["Issue key"] = df["Issue key"].fillna("").astype(str).str.strip()
     df["Summary"] = df["Summary"].fillna("").astype(str).str.strip()
     df["norm"] = df["Summary"].apply(normalize)
-    df["Top Module"] = df["Summary"].apply(extract_top_module)
-    df["Object Label"] = df["Summary"].apply(extract_object_label)
 
     df = df[df["norm"] != ""].reset_index(drop=True)
     return df
@@ -236,7 +102,7 @@ if pool.empty or target.empty:
     st.stop()
 
 # -------------------------------------------------
-# Exact map
+# Exact lookup
 # -------------------------------------------------
 pool_exact_map = {}
 for _, row in pool.iterrows():
@@ -290,12 +156,8 @@ for i, t in target.iterrows():
         candidate_rows.append({
             "Target Key": t_row["Issue key"],
             "Target Summary": t_row["Summary"],
-            "Target Top Module": t_row["Top Module"],
-            "Target Object Label": t_row["Object Label"],
             "Pool Key": p_row["Issue key"],
             "Pool Summary": p_row["Summary"],
-            "Pool Top Module": p_row["Top Module"],
-            "Pool Object Label": p_row["Object Label"],
             "Type": "EXACT",
             "Score": 1.000
         })
@@ -308,53 +170,47 @@ for i, t in target.iterrows():
             if t_row["Summary"] == p_row["Summary"]:
                 continue
 
-            if use_mini_filter and not mini_filter_ok(t_row, p_row):
-                continue
-
             f = fuzzy(t_row["norm"], p_row["norm"])
             if f >= fuzzy_threshold:
                 candidate_rows.append({
                     "Target Key": t_row["Issue key"],
                     "Target Summary": t_row["Summary"],
-                    "Target Top Module": t_row["Top Module"],
-                    "Target Object Label": t_row["Object Label"],
                     "Pool Key": p_row["Issue key"],
                     "Pool Summary": p_row["Summary"],
-                    "Pool Top Module": p_row["Top Module"],
-                    "Pool Object Label": p_row["Object Label"],
                     "Type": "FUZZY",
                     "Score": round(float(f), 3)
                 })
 
     # SEMANTIC
-    if use_ai and not (best_match_only and any(r["Type"] == "EXACT" for r in candidate_rows)):
+    if use_ai:
         semantic_scores = sim_matrix[i]
-        semantic_idx = np.where(semantic_scores >= semantic_threshold)[0]
 
-        for j in semantic_idx:
+        sorted_idx = np.argsort(-semantic_scores)
+        selected = 0
+
+        for j in sorted_idx:
+            if selected >= top_k_semantic:
+                break
+
             p = pool.iloc[j]
             p_row = p.to_dict()
 
             if t_row["Summary"] == p_row["Summary"]:
                 continue
 
-            if use_mini_filter and not mini_filter_ok(t_row, p_row):
-                continue
-
             s = float(semantic_scores[j])
+            if s < semantic_threshold:
+                continue
 
             candidate_rows.append({
                 "Target Key": t_row["Issue key"],
                 "Target Summary": t_row["Summary"],
-                "Target Top Module": t_row["Top Module"],
-                "Target Object Label": t_row["Object Label"],
                 "Pool Key": p_row["Issue key"],
                 "Pool Summary": p_row["Summary"],
-                "Pool Top Module": p_row["Top Module"],
-                "Pool Object Label": p_row["Object Label"],
                 "Type": "SEMANTIC",
                 "Score": round(s, 3)
             })
+            selected += 1
 
     if best_match_only and candidate_rows:
         candidate_rows = sorted(
@@ -401,7 +257,7 @@ col3.metric("Matches", len(df))
 col4.metric("Unique Target Matched", df["Target Key"].nunique() if not df.empty else 0)
 
 if df.empty:
-    st.success("Benzer kayıt bulunamadı 🎉")
+    st.success("Benzer aday bulunamadı 🎉")
 else:
     st.subheader("Similarity Results")
     st.dataframe(df, use_container_width=True, height=560)
@@ -421,7 +277,7 @@ else:
     st.download_button(
         "Download Results",
         data=out.getvalue(),
-        file_name="similarity_results.csv",
+        file_name="similarity_candidates.csv",
         mime="text/csv"
     )
 
@@ -429,6 +285,5 @@ if show_debug:
     st.subheader("Debug")
     st.write("TARGET sample")
     st.dataframe(target.head(20), use_container_width=True)
-
     st.write("POOL sample")
     st.dataframe(pool.head(20), use_container_width=True)
