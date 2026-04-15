@@ -14,31 +14,9 @@ st.title("BSDV — AI Duplicate Bug Checker")
 st.caption("EXACT + FUZZY + SEMANTIC (TR + EN destekli)")
 
 st.markdown("""
-## Duplicate Detection Logic
-
-| Type     | Neyle ölçülür       | Ne yakalar         |
-|----------|----------------------|--------------------|
-| EXACT    | string equality      | birebir aynı       |
-| FUZZY    | karakter benzerliği  | yazım olarak yakın |
-| SEMANTIC | embedding            | anlam olarak aynı  |
-
-### Amaç
-Bu uygulama, bug kayıtları arasında:
-- aynı olanları,
-- neredeyse aynı olanları,
-- farklı dilde yazılmış ama aynı problemi anlatanları
-
-otomatik olarak tespit etmek için kullanılır.
-
-### Nasıl çalışır?
-1. **EXACT** → Summary birebir aynıysa eşleşme verir  
-2. **FUZZY** → Yazım olarak çok benzerse eşleşme verir  
-3. **SEMANTIC** → Yazım farklı olsa da anlam benzerse eşleşme verir  
-
-### Önemli Not
-Semantic eşleşme tek başına yeterli değildir.  
-Aynı aksiyon ve aynı hata tipi geçse bile farklı ekran / farklı feature ise kayıtlar duplicate olmayabilir.  
-Bu yüzden semantic katmanda ek olarak **context / feature kontrolü** uygulanır.
+EXACT → Summary birebir aynıysa eşleşme verir  
+FUZZY → Yazım olarak çok benzerse eşleşme verir  
+SEMANTIC → Yazım farklı olsa da anlam benzerse eşleşme verir
 """)
 
 # -------------------------------------------------
@@ -51,14 +29,14 @@ def normalize(text: str) -> str:
     text = str(text).strip().lower()
     text = unicodedata.normalize("NFKC", text)
 
-    # slash, dash gibi ayırıcıları boşluğa çevir
     text = text.replace("/", " ")
     text = text.replace("-", " ")
 
-    # Türkçe karakterleri koru
+    # Türkçe karakterleri korur
     text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
     text = text.replace("_", " ")
     text = re.sub(r"\s+", " ", text).strip()
+
     return text
 
 
@@ -81,7 +59,8 @@ def extract_feature(text: str) -> str:
     feature_map = {
         "Chats": [
             "chat", "message", "messages", "starred messages", "reply",
-            "forward", "media", "link", "conversation", "mesaj", "sohbet"
+            "forward", "media", "link", "conversation", "mesaj", "sohbet",
+            "bubble"
         ],
         "Calls": [
             "call", "voice call", "video call", "voip", "ringing",
@@ -101,7 +80,7 @@ def extract_feature(text: str) -> str:
             "search", "arama", "search icon"
         ],
         "Reminders": [
-            "reminder", "reminders", "hatırlatıcı", "hatırlatici"
+            "reminder", "reminders", "hatırlatıcı", "hatirlatici"
         ],
         "Authentication": [
             "login", "sign in", "signin", "otp", "verification",
@@ -117,10 +96,35 @@ def extract_feature(text: str) -> str:
     return "Other"
 
 
+def extract_intent(text: str) -> str:
+    t = normalize(text)
+
+    intent_map = {
+        "Reply": ["reply", "replied", "reply edilen", "yanit", "yanıt"],
+        "Forward": ["forward", "forwarded", "ilet"],
+        "Delete": ["delete", "deleted", "sil"],
+        "Edit": ["edit", "edited", "duzenle", "düzenle"],
+        "Search": ["search", "arama"],
+        "Send": ["send", "sending", "gonder", "gönder"],
+        "Receive": ["receive", "received", "al"],
+        "Open": ["open", "opening", "acil", "açıl", "show", "display"],
+        "Crash": ["crash", "crashes", "crashed", "cokme", "çökme"],
+        "Layout": [
+            "alignment", "aligned", "position", "size", "height", "width",
+            "dik", "yatay", "buyukluk", "büyüklük", "gosterilmesi", "gösterilmesi",
+            "bubble"
+        ]
+    }
+
+    for intent, keywords in intent_map.items():
+        for kw in keywords:
+            if kw in t:
+                return intent
+
+    return "General"
+
+
 def extract_screen_tokens(text: str) -> set:
-    """
-    Ekran / context ayrımı için daha kritik kelimeleri toplar.
-    """
     t = normalize(text)
 
     known_phrases = [
@@ -134,7 +138,9 @@ def extract_screen_tokens(text: str) -> set:
         "profile screen",
         "call screen",
         "message info",
-        "archived chats"
+        "archived chats",
+        "chat ekranında",
+        "reply edilen mesaj"
     ]
 
     found = set()
@@ -142,13 +148,13 @@ def extract_screen_tokens(text: str) -> set:
         if phrase in t:
             found.add(phrase)
 
-    # ek token bazlı ekran/context kelimeleri
     important_tokens = {
         "reminder", "reminders",
         "starred", "messages", "message",
         "chat", "call", "status", "channel",
         "settings", "notification", "notifications",
-        "profile", "search", "archive", "archived"
+        "profile", "search", "archive", "archived",
+        "reply", "bubble", "ekran", "screen"
     }
 
     tokens = set(t.split())
@@ -157,31 +163,31 @@ def extract_screen_tokens(text: str) -> set:
 
 
 def semantic_context_ok(target_summary: str, pool_summary: str) -> bool:
-    """
-    Semantic false positive azaltmak için ek kontrol.
-    Mantık:
-    - Feature aynıysa daha güvenli
-    - Feature farklıysa ama ikisi de Other ise ortak context aranır
-    - Ekran / screen token'ları tamamen ayrışıyorsa reddet
-    """
     target_feature = extract_feature(target_summary)
     pool_feature = extract_feature(pool_summary)
 
     target_screen = extract_screen_tokens(target_summary)
     pool_screen = extract_screen_tokens(pool_summary)
 
-    # İki tarafta da belirgin ekran/context tokenları varsa ve hiç kesişmiyorsa reddet
     if target_screen and pool_screen and target_screen.isdisjoint(pool_screen):
         return False
 
-    # Feature farklıysa çoğu durumda reddet
     if target_feature != pool_feature:
-        # İkisi de Other ise ortak önemli token varsa geçebilsin
         if target_feature == "Other" and pool_feature == "Other":
             t_tokens = tokenize(target_summary)
             p_tokens = tokenize(pool_summary)
             common = t_tokens & p_tokens
             return len(common) >= 2
+        return False
+
+    return True
+
+
+def semantic_intent_ok(target_summary: str, pool_summary: str) -> bool:
+    t_intent = extract_intent(target_summary)
+    p_intent = extract_intent(pool_summary)
+
+    if t_intent != p_intent:
         return False
 
     return True
@@ -197,6 +203,7 @@ with st.sidebar:
     use_ai = st.toggle("Enable Semantic AI", value=True)
     best_match_only = st.toggle("Best match only", value=True)
     strict_semantic_context = st.toggle("Strict semantic context check", value=True)
+    strict_semantic_intent = st.toggle("Strict semantic intent check", value=True)
     show_debug = st.toggle("Show debug info", value=False)
 
 pool_file = st.file_uploader("POOL CSV", type=["csv"])
@@ -231,6 +238,7 @@ def load_csv(file_bytes: bytes, delimiter: str) -> pd.DataFrame:
     df["Summary"] = df["Summary"].fillna("").astype(str).str.strip()
     df["norm"] = df["Summary"].apply(normalize)
     df["Feature"] = df["Summary"].apply(extract_feature)
+    df["Intent"] = df["Summary"].apply(extract_intent)
 
     df = df[df["norm"] != ""].reset_index(drop=True)
     return df
@@ -248,7 +256,7 @@ if pool.empty or target.empty:
     st.stop()
 
 # -------------------------------------------------
-# Lookup maps
+# Exact lookup
 # -------------------------------------------------
 pool_exact_map = {}
 for _, row in pool.iterrows():
@@ -292,26 +300,28 @@ progress = st.progress(0)
 status = st.empty()
 
 for i, t in target.iterrows():
-    status.text(f"Processing {i+1}/{len(target)}")
+    status.text(f"Processing {i + 1}/{len(target)}")
     progress.progress((i + 1) / len(target))
 
     candidate_rows = []
 
-    # 1) EXACT
+    # EXACT
     exact_hits = pool_exact_map.get(t["Summary"], [])
     for p in exact_hits:
         candidate_rows.append({
             "Target Key": t["Issue key"],
             "Target Summary": t["Summary"],
             "Target Feature": t["Feature"],
+            "Target Intent": t["Intent"],
             "Pool Key": p["Issue key"],
             "Pool Summary": p["Summary"],
             "Pool Feature": p["Feature"],
+            "Pool Intent": p["Intent"],
             "Type": "EXACT",
             "Score": 1.000
         })
 
-    # 2) FUZZY
+    # FUZZY
     if not (best_match_only and candidate_rows):
         for _, p in pool.iterrows():
             if t["Summary"] == p["Summary"]:
@@ -323,14 +333,16 @@ for i, t in target.iterrows():
                     "Target Key": t["Issue key"],
                     "Target Summary": t["Summary"],
                     "Target Feature": t["Feature"],
+                    "Target Intent": t["Intent"],
                     "Pool Key": p["Issue key"],
                     "Pool Summary": p["Summary"],
                     "Pool Feature": p["Feature"],
+                    "Pool Intent": p["Intent"],
                     "Type": "FUZZY",
                     "Score": round(float(f), 3)
                 })
 
-    # 3) SEMANTIC
+    # SEMANTIC
     if use_ai and not (best_match_only and any(r["Type"] == "EXACT" for r in candidate_rows)):
         semantic_scores = sim_matrix[i]
         semantic_idx = np.where(semantic_scores >= semantic_threshold)[0]
@@ -341,9 +353,11 @@ for i, t in target.iterrows():
             if t["Summary"] == p["Summary"]:
                 continue
 
-            if strict_semantic_context:
-                if not semantic_context_ok(t["Summary"], p["Summary"]):
-                    continue
+            if strict_semantic_context and not semantic_context_ok(t["Summary"], p["Summary"]):
+                continue
+
+            if strict_semantic_intent and not semantic_intent_ok(t["Summary"], p["Summary"]):
+                continue
 
             s = float(semantic_scores[j])
 
@@ -351,9 +365,11 @@ for i, t in target.iterrows():
                 "Target Key": t["Issue key"],
                 "Target Summary": t["Summary"],
                 "Target Feature": t["Feature"],
+                "Target Intent": t["Intent"],
                 "Pool Key": p["Issue key"],
                 "Pool Summary": p["Summary"],
                 "Pool Feature": p["Feature"],
+                "Pool Intent": p["Intent"],
                 "Type": "SEMANTIC",
                 "Score": round(s, 3)
             })
@@ -374,7 +390,7 @@ status.empty()
 df = pd.DataFrame(results)
 
 # -------------------------------------------------
-# Result cleanup
+# Cleanup
 # -------------------------------------------------
 if not df.empty:
     df = df.drop_duplicates(
@@ -394,7 +410,7 @@ if not df.empty:
     )
 
 # -------------------------------------------------
-# UI output
+# Output
 # -------------------------------------------------
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("POOL", len(pool))
