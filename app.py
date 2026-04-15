@@ -4,10 +4,13 @@ import re
 from difflib import SequenceMatcher
 from io import BytesIO
 
-st.set_page_config(page_title="BSDV_DUP_CHECK", layout="wide")
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
-st.title("BSDV — Bug Duplicate Checker (POOL vs TARGET)")
-st.caption("Sadece SUMMARY bazlı EXACT ve SEMANTIC duplicate kontrolü")
+st.set_page_config(page_title="BSDV_DUP_CHECK_AI", layout="wide")
+
+st.title("BSDV — AI Duplicate Bug Checker")
+st.caption("EXACT + FUZZY + SEMANTIC (TR + EN destekli)")
 
 # ----------------------------
 # Helpers
@@ -16,104 +19,129 @@ def normalize(text: str) -> str:
     if pd.isna(text):
         return ""
     text = str(text).lower()
+
     text = re.sub(r"[^a-z0-9 ]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def similarity(a: str, b: str) -> float:
+def fuzzy(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 # ----------------------------
 # UI
 # ----------------------------
 with st.sidebar:
-    st.header("Settings")
     delimiter = st.selectbox("CSV delimiter", [";", ","], index=0)
-    threshold = st.slider("Semantic similarity threshold", 0.7, 1.0, 0.85)
+    fuzzy_threshold = st.slider("Fuzzy threshold", 0.7, 1.0, 0.85)
+    semantic_threshold = st.slider("Semantic threshold", 0.7, 1.0, 0.80)
+    use_ai = st.toggle("Enable Semantic AI", value=True)
 
-st.subheader("Upload CSVs")
+pool_file = st.file_uploader("POOL CSV", type=["csv"])
+target_file = st.file_uploader("TARGET CSV", type=["csv"])
 
-pool_file = st.file_uploader("POOL CSV (reference)", type=["csv"])
-target_file = st.file_uploader("TARGET CSV (to check)", type=["csv"])
+run = st.button("🔍 Find Duplicates")
 
 if not pool_file or not target_file:
-    st.info("İki CSV de yüklenmeli.")
+    st.stop()
+
+if not run:
     st.stop()
 
 # ----------------------------
-# Load
+# Load data
 # ----------------------------
-def load_csv(file):
-    df = pd.read_csv(file, sep=delimiter, engine="python")
+def load(file):
+    df = pd.read_csv(file, sep=delimiter)
     df.columns = [c.strip() for c in df.columns]
 
-    required = ["Issue key", "Summary"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        st.error(f"Missing columns: {missing}")
-        st.stop()
-
-    df = df[required].copy()
-    df["Summary_norm"] = df["Summary"].apply(normalize)
-
+    df = df[["Issue key", "Summary"]].copy()
+    df["norm"] = df["Summary"].apply(normalize)
     return df
 
-pool_df = load_csv(pool_file)
-target_df = load_csv(target_file)
+pool = load(pool_file)
+target = load(target_file)
+
+# ----------------------------
+# Embedding model
+# ----------------------------
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+
+model = load_model() if use_ai else None
+
+if use_ai:
+    pool_emb = model.encode(pool["Summary"].tolist(), show_progress_bar=True)
+    target_emb = model.encode(target["Summary"].tolist(), show_progress_bar=True)
 
 # ----------------------------
 # Matching
 # ----------------------------
 results = []
 
-for _, t in target_df.iterrows():
-    for _, p in pool_df.iterrows():
+for i, t in target.iterrows():
+    for j, p in pool.iterrows():
 
         # EXACT
         if t["Summary"] == p["Summary"]:
             results.append({
-                "Target Issue": t["Issue key"],
-                "Pool Issue": p["Issue key"],
+                "Target Key": t["Issue key"],
+                "Target Summary": t["Summary"],
+                "Pool Key": p["Issue key"],
+                "Pool Summary": p["Summary"],
                 "Type": "EXACT",
-                "Similarity": 1.0
+                "Score": 1.0
+            })
+            continue
+
+        # FUZZY
+        f = fuzzy(t["norm"], p["norm"])
+        if f >= fuzzy_threshold:
+            results.append({
+                "Target Key": t["Issue key"],
+                "Target Summary": t["Summary"],
+                "Pool Key": p["Issue key"],
+                "Pool Summary": p["Summary"],
+                "Type": "FUZZY",
+                "Score": round(f, 3)
             })
             continue
 
         # SEMANTIC
-        sim = similarity(t["Summary_norm"], p["Summary_norm"])
-        if sim >= threshold:
-            results.append({
-                "Target Issue": t["Issue key"],
-                "Pool Issue": p["Issue key"],
-                "Type": "SEMANTIC",
-                "Similarity": round(sim, 3)
-            })
+        if use_ai:
+            s = cosine_similarity(
+                [target_emb[i]],
+                [pool_emb[j]]
+            )[0][0]
 
-result_df = pd.DataFrame(results)
+            if s >= semantic_threshold:
+                results.append({
+                    "Target Key": t["Issue key"],
+                    "Target Summary": t["Summary"],
+                    "Pool Key": p["Issue key"],
+                    "Pool Summary": p["Summary"],
+                    "Type": "SEMANTIC",
+                    "Score": round(float(s), 3)
+                })
+
+df = pd.DataFrame(results)
 
 # ----------------------------
-# UI Output
+# UI output
 # ----------------------------
-col1, col2, col3 = st.columns(3)
-col1.metric("Target count", len(target_df))
-col2.metric("Pool count", len(pool_df))
-col3.metric("Matches found", len(result_df))
+st.metric("Matches", len(df))
 
-st.divider()
-
-if result_df.empty:
+if df.empty:
     st.success("Duplicate bulunamadı 🎉")
 else:
-    st.subheader("Matches")
-    st.dataframe(result_df, use_container_width=True, height=500)
+    st.dataframe(df, use_container_width=True, height=500)
 
-    # download
     out = BytesIO()
-    result_df.to_csv(out, sep=";", index=False)
+    df.to_csv(out, index=False, sep=";")
 
     st.download_button(
         "Download Results",
         data=out.getvalue(),
-        file_name="duplicate_results.csv",
+        file_name="duplicates.csv",
         mime="text/csv"
     )
